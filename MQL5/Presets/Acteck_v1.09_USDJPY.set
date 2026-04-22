@@ -1,7 +1,7 @@
 ; Acteck v1.09 Portfolio — график USDJPY (профиль AUTO → встроенный USDJPY: A+C, без B)
 ; Загружать только на USDJPY. Встроенный профиль усиливает фильтры волатильности.
 
-SymbolStrategyProfile=0
+SymbolStrategyProfile=1
 
 Timeframe=5
 DayStartHour=0
@@ -9,12 +9,12 @@ UsePrevDayLevels=true
 ShowLevelsLenBars=500
 BalanceUseOpenPrice=false
 
-CZ_LookbackN=20
+CZ_LookbackN=22
 CZ_ATR_Period=14
-CZ_ATR_K=1.0
-BreakCloseOffset=5
-RetestDepth=5
-WickRatio=2.5
+CZ_ATR_K=0.9
+BreakCloseOffset=7
+RetestDepth=8
+WickRatio=2.6
 ConfirmPattern=0
 EnableSignalA=true
 EnableSignalB=false
@@ -23,17 +23,17 @@ EnableSignalC=true
 EMA_Period=200
 EMA_FilterMode=1
 ATR_Period=14
-ATR_Min=20
-RangeMinATR_Mult=0.12
+ATR_Min=22
+RangeMinATR_Mult=0.15
 
-MinRewardToRisk=1.0
-UseServerSession=false
+MinRewardToRisk=1.2
+UseServerSession=true
 SessionStartHour=7
-SessionEndHour=22
+SessionEndHour=20
 
 CloseBeforeWeekend=true
 FridayCloseHourServer=20
-MaxPositionLifetimeHours=20
+MaxPositionLifetimeHours=12
 
 TradeEnabled=true
 LotMode=0
@@ -47,7 +47,7 @@ TP_Points=200
 TP_Offset=0
 
 UseBE=true
-BE_Trigger=120
+BE_Trigger=90
 BE_Offset=5
 
 UseTS=false
@@ -63,7 +63,7 @@ PC_Vol2=0.50
 OnlyOneTradePerBar=true
 ReEntries=0
 MaxPositions=1
-MaxSpread=30
+MaxSpread=26
 Slippage=10
 MagicNumber=240203
 CommentPrefix=Acteck_JPY

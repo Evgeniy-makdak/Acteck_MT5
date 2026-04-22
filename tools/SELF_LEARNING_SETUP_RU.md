@@ -35,7 +35,7 @@
 
 4. **Python-скрипты**
    - Не обязательно копировать в MT5.
-   - Рекомендуется запускать из проекта: `SP_EA_RU_v108_CLIENT/tools/`.
+- Рекомендуется запускать из текущего проекта: `Acteck_MT5-main/tools/`.
    - Это безопаснее и проще обновлять.
 
 ## Шаг 1. Экспорт истории из MetaTrader 5
@@ -47,9 +47,9 @@
 5. Если MT5 сохраняет только HTML, сначала конвертируйте:
 
 ```bash
-python3 "SP_EA_RU_v108_CLIENT/tools/mt5_html_to_csv.py" \
+python3 "tools/mt5_html_to_csv.py" \
   --html "/абсолютный/путь/к/mt5_report.html" \
-  --csv "SP_EA_RU_v108_CLIENT/tools/history_from_html.csv"
+  --csv "tools/history_from_html.csv"
 ```
 
 ## Шаг 2. Запуск скрипта
@@ -57,10 +57,10 @@ python3 "SP_EA_RU_v108_CLIENT/tools/mt5_html_to_csv.py" \
 Из папки проекта выполните:
 
 ```bash
-python3 "SP_EA_RU_v108_CLIENT/tools/recalibrate_presets.py" \
+python3 "tools/recalibrate_presets.py" \
   --history "/абсолютный/путь/к/history.csv" \
-  --template "SP_EA_RU_v108_CLIENT/Presets/14_Snayper_Pricel_v1.09_OPTIMIZED.set" \
-  --outdir "SP_EA_RU_v108_CLIENT/Presets/generated" \
+  --template "MQL5/Presets/Acteck_v1.09_EURUSD.set" \
+  --outdir "tools/generated" \
   --min-trades 30
 ```
 
@@ -76,10 +76,10 @@ python3 "SP_EA_RU_v108_CLIENT/tools/recalibrate_presets.py" \
 ## Запуск v2 (сегментация по сессии/дню недели)
 
 ```bash
-python3 "SP_EA_RU_v108_CLIENT/tools/recalibrate_presets_v2.py" \
+python3 "tools/recalibrate_presets_v2.py" \
   --history "/абсолютный/путь/к/history.csv" \
-  --template "SP_EA_RU_v108_CLIENT/Presets/14_Snayper_Pricel_v1.09_OPTIMIZED.set" \
-  --outdir "SP_EA_RU_v108_CLIENT/Presets/generated_v2" \
+  --template "MQL5/Presets/Acteck_v1.09_EURUSD.set" \
+  --outdir "tools/generated_v2" \
   --min-trades 30 \
   --segment-session \
   --segment-weekday
@@ -95,10 +95,10 @@ python3 "SP_EA_RU_v108_CLIENT/tools/recalibrate_presets_v2.py" \
 Одна команда выполняет весь цикл:
 
 ```bash
-python3 "SP_EA_RU_v108_CLIENT/tools/mt5_pipeline_v2.py" \
+python3 "tools/mt5_pipeline_v2.py" \
   --html "/абсолютный/путь/к/mt5_report.html" \
-  --template "SP_EA_RU_v108_CLIENT/Presets/14_Snayper_Pricel_v1.09_OPTIMIZED.set" \
-  --workdir "SP_EA_RU_v108_CLIENT/tools/run_01" \
+  --template "MQL5/Presets/Acteck_v1.09_EURUSD.set" \
+  --workdir "tools/run_01" \
   --min-trades 30 \
   --segment-session \
   --segment-weekday \
