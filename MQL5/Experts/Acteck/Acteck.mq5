@@ -81,10 +81,53 @@ int               g_cnt = 0;
 string UI_PREFIX      = "acteck5_";
 int    UI_X           = 15;
 int    UI_Y           = 35;
-int    UI_ROW_H       = 22;
-int    UI_COL_W       = 130;
-int    UI_SYM_W       = 85;
-int    UI_ATR_W       = 50;
+int    UI_ROW_H       = 24;
+int    UI_COL_W       = 145;
+int    UI_SYM_W       = 95;
+int    UI_ATR_W       = 55;
+
+string NormalizeSymbolCode(string s)
+{
+   s = StringUpper(s);
+   s = StringReplace(s, " ", "");
+   s = StringReplace(s, "/", "");
+   return s;
+}
+
+string ResolveSymbolName(string requested)
+{
+   string req = NormalizeSymbolCode(requested);
+   if(req == "")
+      return "";
+
+   // exact
+   if(SymbolInfoDouble(req, SYMBOL_POINT) > 0.0)
+      return req;
+   if(SymbolInfoDouble(requested, SYMBOL_POINT) > 0.0)
+      return requested;
+
+   // try to find by prefix with broker suffixes, e.g. EURUSDpf
+   string best = "";
+   int best_extra = 1000;
+   int total = SymbolsTotal(false); // all symbols
+   for(int i = 0; i < total; i++)
+   {
+      string name = SymbolName(i, false);
+      string norm = NormalizeSymbolCode(name);
+      if(StringLen(norm) < StringLen(req))
+         continue;
+      if(StringSubstr(norm, 0, StringLen(req)) == req)
+      {
+         int extra = StringLen(norm) - StringLen(req);
+         if(extra < best_extra)
+         {
+            best = name;
+            best_extra = extra;
+         }
+      }
+   }
+   return best;
+}
 
 double PointValue(const string sym)
 {
@@ -187,10 +230,13 @@ bool LoadSymbolsSet(const string name, string &arr[])
       string line = TrimString(FileReadString(h));
       if(line == "")
          continue;
+      string resolved = ResolveSymbolName(line);
+      if(resolved == "")
+         resolved = line;
       int n = ArraySize(arr);
       ArrayResize(arr, n + 1);
-      arr[n] = line;
-      SymbolSelect(line, true);
+      arr[n] = resolved;
+      SymbolSelect(resolved, true);
    }
    FileClose(h);
    return(ArraySize(arr) > 0);
@@ -382,7 +428,12 @@ void SearchTrends(const string sy, ENUM_TIMEFRAMES tf, datetime end_time, int pi
    ArrayResize(report, 0);
    int star_date = BarsShiftSafe(sy, tf, StartDate);
    int end_date  = BarsShiftSafe(sy, tf, end_time);
-   if(star_date < 0 || end_date < 0 || star_date <= end_date)
+   int bars = iBars(sy, tf);
+   if(star_date < 0)
+      star_date = bars - 1;
+   if(end_date < 0)
+      end_date = 0;
+   if(star_date <= end_date || bars < 10)
    {
       g_cnt = 0;
       return;
@@ -438,6 +489,7 @@ int CalcProbability(const string sy, double s, double e)
 void DrawHorizontal(const string name, const double price, const color clr, const string text)
 {
    ObjectDelete(0, name);
+   ObjectDelete(0, name + "_lbl");
    datetime t1 = iTime(_Symbol, PERIOD_CURRENT, 30);
    datetime t2 = iTime(_Symbol, PERIOD_CURRENT, 0);
    if(t1 <= 0 || t2 <= 0)
@@ -450,6 +502,17 @@ void DrawHorizontal(const string name, const double price, const color clr, cons
    ObjectSetInteger(0, name, OBJPROP_BACK, true);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
+
+   // Visible probability label near the right edge
+   if(text != "")
+   {
+      ObjectCreate(0, name + "_lbl", OBJ_TEXT, 0, t2, price);
+      ObjectSetString(0, name + "_lbl", OBJPROP_TEXT, text);
+      ObjectSetInteger(0, name + "_lbl", OBJPROP_COLOR, clr);
+      ObjectSetInteger(0, name + "_lbl", OBJPROP_FONTSIZE, FontSize - 1);
+      ObjectSetInteger(0, name + "_lbl", OBJPROP_ANCHOR, ANCHOR_LEFT_LOWER);
+      ObjectSetInteger(0, name + "_lbl", OBJPROP_SELECTABLE, false);
+   }
 }
 
 void DrawTrendsAndProbability(const string sy, int pips)
@@ -501,6 +564,7 @@ void SetLabel(const string name, const int x, const int y, const string text, co
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, FontSize);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
+    ObjectSetString(0, name, OBJPROP_FONT, "Arial");
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
 }
 
@@ -517,10 +581,35 @@ void SetButton(const string name, const int x, const int y, const int w, const i
    ObjectSetInteger(0, name, OBJPROP_COLOR, fg);
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, FontSize - 1);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetString(0, name, OBJPROP_FONT, "Arial");
+   ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, C'120,120,120');
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+}
+
+void DrawTablePanel(const int rows)
+{
+   string name = UI_PREFIX + "panel";
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   int w = UI_SYM_W + UI_ATR_W + (5 * UI_COL_W) + 20;
+   int h = 40 + rows * UI_ROW_H + 20;
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UI_X - 8);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UI_Y - 28);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, C'245,245,245');
+   ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, C'90,90,90');
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, -1);
 }
 
 void BuildUI()
 {
+   int rows = ArraySize(g_symbols);
+   DrawTablePanel(rows);
+
    SetLabel(UI_PREFIX + "title", UI_X, UI_Y - 18, "Acteck QA5 | Author: Evgeniy Acteck", C'0,8,127');
    SetButton(UI_PREFIX + "mode", UI_X + 530, UI_Y - 22, 120, 20, (g_view_mode == MODE_PROBABILITY ? "Вероятность" : "Длительность"), clrForestGreen, clrWhite);
    SetLabel(UI_PREFIX + "h_sym", UI_X + 10, UI_Y, "Символ", C'0,8,127');
@@ -532,7 +621,6 @@ void BuildUI()
       SetLabel(UI_PREFIX + "h_f_" + IntegerToString(c), UI_X + UI_SYM_W + UI_ATR_W + 10 + c * UI_COL_W, UI_Y, txt, C'0,8,127');
    }
 
-   int rows = ArraySize(g_symbols);
    int total_signals = rows * 5;
    if(ArraySize(g_alerts) != total_signals)
    {
@@ -546,17 +634,18 @@ void BuildUI()
       int y = UI_Y + 22 + r * UI_ROW_H;
       SetLabel(UI_PREFIX + "sym_" + IntegerToString(r), UI_X + 10, y, g_symbols[r], C'0,8,127');
 
-      double atr_handle = iATR(g_symbols[r], PERIOD_CURRENT, ATRPeriod);
+      int atr_handle = iATR(g_symbols[r], PERIOD_CURRENT, ATRPeriod);
       string atr_text = "-";
       if(atr_handle != INVALID_HANDLE)
       {
          double buf[];
-         if(CopyBuffer((int)atr_handle, 0, 0, 1, buf) > 0)
+         if(CopyBuffer(atr_handle, 0, 0, 1, buf) > 0)
          {
             double pt = PointValue(g_symbols[r]);
-            atr_text = DoubleToString(buf[0] / pt / 10.0, 0);
+            if(pt > 0.0)
+               atr_text = DoubleToString(buf[0] / pt / 10.0, 0);
          }
-         IndicatorRelease((int)atr_handle);
+         IndicatorRelease(atr_handle);
       }
       SetLabel(UI_PREFIX + "atr_" + IntegerToString(r), UI_X + UI_SYM_W, y, atr_text, C'0,8,127');
 
@@ -609,10 +698,12 @@ void UpdateTable()
             continue;
          }
 
+         MqlRates preload[];
+         CopyRates(sy, tf, 0, 3000, preload);
          SearchTrends(sy, tf, iTime(sy, tf, 0), filter, false);
          if(g_cnt <= 0)
          {
-            SetCell(r, c, "N/A", 0);
+            SetCell(r, c, "--", 0);
             idx++;
             continue;
          }
@@ -625,7 +716,7 @@ void UpdateTable()
          SearchTrends(sy, tf, iTime(sy, tf, 0), filter, false);
          if(g_cnt <= 0)
          {
-            SetCell(r, c, "N/A", 0);
+            SetCell(r, c, "--", 0);
             idx++;
             continue;
          }
@@ -648,7 +739,7 @@ void UpdateTable()
          int clr = 0;
          if(perc >= 60)
             clr = (report[g_cnt - 1].trend == "buy" ? 1 : -1);
-         SetCell(r, c, IntegerToString(perc) + "%/" + IntegerToString(max_corr) + "/" + curr_dev, clr);
+         SetCell(r, c, IntegerToString(perc) + "%  " + IntegerToString(max_corr) + "  " + curr_dev, clr);
          idx++;
       }
    }
