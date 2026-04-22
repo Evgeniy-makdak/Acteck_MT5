@@ -95,10 +95,10 @@ double PointValue(const string sym)
 
 int DigitsValue(const string sym)
 {
-   int d = 0;
+   long d = 0;
    if(!SymbolInfoInteger(sym, SYMBOL_DIGITS, d))
       return(5);
-   return(d);
+   return((int)d);
 }
 
 string TFToString(ENUM_TIMEFRAMES tf)
@@ -151,6 +151,13 @@ void EnsureDrawPath()
    FolderCreate("Acteck");
 }
 
+string TrimString(string s)
+{
+   StringTrimLeft(s);
+   StringTrimRight(s);
+   return s;
+}
+
 bool LoadSymbolsSet(const string name, string &arr[])
 {
    string path = "Acteck\\" + name + ".set";
@@ -169,7 +176,7 @@ bool LoadSymbolsSet(const string name, string &arr[])
    ArrayResize(arr, 0);
    while(!FileIsEnding(h))
    {
-      string line = StringTrim(FileReadString(h));
+      string line = TrimString(FileReadString(h));
       if(line == "")
          continue;
       int n = ArraySize(arr);
@@ -207,7 +214,8 @@ void WriteReport2(const string sy, REPORT &rep[], int &arr[])
    ArrayResize(arr, l);
    for(int i = 0; i < l; i++)
       arr[i] = rep[i].pips;
-   ArraySort(arr, WHOLE_ARRAY, 0, MODE_DESCEND);
+   ArraySort(arr);
+   ArrayReverse(arr);
    for(int i = 0; i < l; i++)
       FileWrite(h, rep[i].pips, arr[i]);
    FileClose(h);
@@ -405,7 +413,8 @@ int CalcProbability(const string sy, double s, double e)
    ArrayResize(prob1, l);
    for(int k = 0; k < l; k++)
       prob1[k] = report[k].pips;
-   ArraySort(prob1, WHOLE_ARRAY, 0, MODE_DESCEND);
+   ArraySort(prob1);
+   ArrayReverse(prob1);
 
    int direct = (s < e) ? 1 : -1;
    double pt = PointValue(sy);
