@@ -88,9 +88,9 @@ int    UI_ATR_W       = 55;
 
 string NormalizeSymbolCode(string s)
 {
-   s = StringUpper(s);
-   s = StringReplace(s, " ", "");
-   s = StringReplace(s, "/", "");
+   StringToUpper(s);
+   StringReplace(s, " ", "");
+   StringReplace(s, "/", "");
    return s;
 }
 
