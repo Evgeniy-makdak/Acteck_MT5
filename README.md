@@ -29,6 +29,7 @@
 - `docs/TOOLS_STEP_BY_STEP_RU.md` — максимально подробная пошаговая инструкция по `tools/*`.
 - `docs/ALGORITHM_DECISION_ENGINE_RU.md` — детальный алгоритм принятия решений EA.
 - `docs/STATISTICS_ANALYSIS_RU.md` — разбор результатов `Статистика.xlsx` и принятых изменений пресетов.
+- `docs/CHECKLIST_PRESET_VALIDATION_RU.md` — чек-лист проверки новых `.set` в Strategy Tester.
 - `tools/SELF_LEARNING_SETUP_RU.md` — расширенные примеры запуска recalibration.
 - `tools/RUN_COMMAND_USAGE_RU.md` — краткий справочник по запуску `.command`.
 
