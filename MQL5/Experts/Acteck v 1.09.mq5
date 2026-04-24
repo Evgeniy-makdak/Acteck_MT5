@@ -790,6 +790,12 @@ bool SendDeal(const int direction, const double volume, const double sl, const d
    if(volume <= 0)
       return false;
 
+   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED))
+   {
+      Log("Trade environment not ready: terminal or EA trading is disabled");
+      return false;
+   }
+
    MqlTradeRequest req;
    MqlTradeResult  res;
    ZeroMemory(req);
@@ -804,36 +810,71 @@ bool SendDeal(const int direction, const double volume, const double sl, const d
    req.type_filling= GetFillingMode();
    req.comment     = comment;
 
-   if(direction > 0)
-   {
-      req.type  = ORDER_TYPE_BUY;
-      req.price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   }
-   else
-   {
-      req.type  = ORDER_TYPE_SELL;
-      req.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   }
+   req.type = (direction > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
 
    req.sl = sl;
    req.tp = tp;
 
-   bool ok = OrderSendWithFillingFallback(req, res);
-   if(!ok)
+   // Startup reliability: the first signal after terminal launch may hit transient trade context/price readiness issues.
+   // Retry several times on temporary errors so a valid first signal is not lost as "no deal".
+   const int max_attempts = 3;
+   for(int attempt = 1; attempt <= max_attempts; attempt++)
    {
-      string extra = (res.retcode != 0 ? StringFormat(", retcode=%d (%s)", (int)res.retcode, res.comment) : "");
-      Log("OrderSend() failed" + extra + ", error=" + IntegerToString(GetLastError()));
+      req.price = (direction > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      if(req.price <= 0.0)
+      {
+         MqlTick t;
+         if(SymbolInfoTick(_Symbol, t))
+            req.price = (direction > 0) ? t.ask : t.bid;
+      }
+      req.price = NormalizePrice(req.price);
+      if(req.price <= 0.0)
+      {
+         Log(StringFormat("OrderSend attempt %d/%d skipped: no valid market price yet", attempt, max_attempts));
+         if(attempt < max_attempts)
+            Sleep(200);
+         continue;
+      }
+
+      bool ok = OrderSendWithFillingFallback(req, res);
+      if(ok && (res.retcode == TRADE_RETCODE_DONE || res.retcode == TRADE_RETCODE_DONE_PARTIAL))
+      {
+         deal_out = res.deal;
+         return true;
+      }
+
+      bool transient =
+         (res.retcode == TRADE_RETCODE_REQUOTE ||
+          res.retcode == TRADE_RETCODE_PRICE_CHANGED ||
+          res.retcode == TRADE_RETCODE_PRICE_OFF ||
+          res.retcode == TRADE_RETCODE_CONNECTION ||
+          res.retcode == TRADE_RETCODE_TIMEOUT ||
+          res.retcode == TRADE_RETCODE_TOO_MANY_REQUESTS ||
+          res.retcode == TRADE_RETCODE_SERVER_DISABLES_AT ||
+          res.retcode == TRADE_RETCODE_CLIENT_DISABLES_AT ||
+          res.retcode == TRADE_RETCODE_LOCKED);
+
+      if(attempt < max_attempts && transient)
+      {
+         Log(StringFormat("OrderSend transient issue (attempt %d/%d): retcode=%d (%s), retrying",
+                          attempt, max_attempts, (int)res.retcode, res.comment));
+         Sleep(250);
+         continue;
+      }
+
+      if(!ok)
+      {
+         string extra = (res.retcode != 0 ? StringFormat(", retcode=%d (%s)", (int)res.retcode, res.comment) : "");
+         Log("OrderSend() failed" + extra + ", error=" + IntegerToString(GetLastError()));
+      }
+      else
+      {
+         Log(StringFormat("Deal rejected retcode=%d (%s)", (int)res.retcode, res.comment));
+      }
       return false;
    }
 
-   if(res.retcode != TRADE_RETCODE_DONE && res.retcode != TRADE_RETCODE_DONE_PARTIAL)
-   {
-      Log(StringFormat("Deal rejected retcode=%d (%s)", (int)res.retcode, res.comment));
-      return false;
-   }
-
-   deal_out = res.deal;
-   return true;
+   return false;
 }
 
 bool SendPositionSLTP(const ulong position_ticket, const double sl, const double tp)
@@ -2827,6 +2868,12 @@ int OnInit()
                     GetSymbolBaseName(),
                     (int)g_EnableSignalA, (int)g_EnableSignalB, (int)g_EnableSignalC,
                     g_ATR_Min_Eff, g_MaxSpread_Eff));
+
+   // Warm start: process the latest closed bar immediately after attach/restart.
+   // This prevents missing the first valid setup until the next bar appears.
+   g_lastBarTime = iTime(_Symbol, Timeframe, 0);
+   if(g_lastBarTime > 0)
+      ProcessOnBarClose();
 
    return INIT_SUCCEEDED;
 }

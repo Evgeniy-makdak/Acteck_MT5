@@ -9,12 +9,12 @@ UsePrevDayLevels=true
 ShowLevelsLenBars=500
 BalanceUseOpenPrice=false
 
-CZ_LookbackN=22
+CZ_LookbackN=18
 CZ_ATR_Period=14
-CZ_ATR_K=0.9
-BreakCloseOffset=7
-RetestDepth=8
-WickRatio=2.6
+CZ_ATR_K=1.15
+BreakCloseOffset=6
+RetestDepth=6
+WickRatio=2.3
 ConfirmPattern=0
 EnableSignalA=true
 EnableSignalB=false
@@ -23,17 +23,17 @@ EnableSignalC=true
 EMA_Period=200
 EMA_FilterMode=1
 ATR_Period=14
-ATR_Min=22
-RangeMinATR_Mult=0.15
+ATR_Min=16
+RangeMinATR_Mult=0.08
 
-MinRewardToRisk=1.2
-UseServerSession=true
+MinRewardToRisk=1.05
+UseServerSession=false
 SessionStartHour=7
-SessionEndHour=20
+SessionEndHour=22
 
 CloseBeforeWeekend=true
 FridayCloseHourServer=20
-MaxPositionLifetimeHours=12
+MaxPositionLifetimeHours=0
 
 TradeEnabled=true
 LotMode=0
