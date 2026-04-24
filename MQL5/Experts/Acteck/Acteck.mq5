@@ -94,6 +94,8 @@ int    UI_TOP_PAD     = 78;
 int    g_ui_panel_top = 0;
 int    g_ui_row_start_y = 0;
 int    g_ui_debug_y = 0;
+int    g_ui_debug_text_x = 0;
+int    g_ui_debug_text_w = 0;
 int    g_ui_panel_right = 0;
 int    g_last_chart_w = 0;
 int    g_last_chart_h = 0;
@@ -742,23 +744,28 @@ void DrawTrendsAndProbability(const string sy, int pips)
          DrawHorizontal(UI_PREFIX + "price_tp", tp, clrLime, "Target static");
       if(g_show_debug_details)
       {
-         int dbg_x = UI_X + 188;
-         int dbg_w = g_ui_panel_right - dbg_x - 14;
+         int dbg_x = g_ui_debug_text_x;
+         int dbg_w = g_ui_debug_text_w;
          if(dbg_w < 120)
             dbg_w = 120;
          string dbg_text = "Pcur=" + IntegerToString(curr_prob) + "%, Dist=" + DoubleToString(dist_pts, 0) +
                            "pt, N=" + IntegerToString(n) + ", idx=" + IntegerToString(rank);
          if(has_dyn_target)
-            dbg_text += ", Tdyn=" + DoubleToString(dyn_target_pips10, 0) + "p (" + DoubleToString(dyn_target_bars, 1) + " bars), Ns=" + IntegerToString(dyn_samples);
+            dbg_text += ", Tdyn=" + DoubleToString(dyn_target_pips10, 0) + "p (" + DoubleToString(dyn_target_bars, 1) + " bars),";
          else
             dbg_text += ", Tdyn=NA";
          SetLabel(UI_PREFIX + "prob_details", dbg_x, g_ui_debug_y,
                   FitTextByPixels(dbg_text, dbg_w, 7),
                   C'80,80,80');
+         if(has_dyn_target)
+            SetLabel(UI_PREFIX + "prob_details_2", dbg_x, g_ui_debug_y + 24, "Ns=" + IntegerToString(dyn_samples), C'80,80,80');
+         else
+            ObjectDelete(0, UI_PREFIX + "prob_details_2");
       }
       else
       {
          ObjectDelete(0, UI_PREFIX + "prob_details");
+         ObjectDelete(0, UI_PREFIX + "prob_details_2");
       }
    }
    else
@@ -766,6 +773,7 @@ void DrawTrendsAndProbability(const string sy, int pips)
       ObjectDelete(0, UI_PREFIX + "price_now");
       ObjectDelete(0, UI_PREFIX + "price_tp");
       ObjectDelete(0, UI_PREFIX + "prob_details");
+      ObjectDelete(0, UI_PREFIX + "prob_details_2");
       ObjectsDeleteAll(0, UI_PREFIX + "line_prob_");
 
       SearchTrends(sy, g_current_tf, EffectiveEndDate(), pips, false);
@@ -778,8 +786,9 @@ void DrawTrendsAndProbability(const string sy, int pips)
             if(mins_i > tmax) tmax = mins_i;
             if(report[i].pips > lmax) lmax = report[i].pips;
          }
-         SetLabel(UI_PREFIX + "mode_stat_1", UI_X + 188, g_ui_debug_y, "Tmax=" + IntegerToString(tmax) + "m", clrLime);
-         SetLabel(UI_PREFIX + "mode_stat_2", UI_X + 380, g_ui_debug_y, "Lmax=" + IntegerToString(lmax / 10) + "p", clrLime);
+         int stat2_x = g_ui_debug_text_x + MathMax(260, g_ui_debug_text_w / 2);
+         SetLabel(UI_PREFIX + "mode_stat_1", g_ui_debug_text_x, g_ui_debug_y, "Tmax=" + IntegerToString(tmax) + "m", clrLime);
+         SetLabel(UI_PREFIX + "mode_stat_2", stat2_x, g_ui_debug_y, "Lmax=" + IntegerToString(lmax / 10) + "p", clrLime);
       }
       else if(g_view_mode == MODE_SPEED)
       {
@@ -795,8 +804,9 @@ void DrawTrendsAndProbability(const string sy, int pips)
          double avg_speed = (n_speed > 0 ? sum_speed / n_speed : 0.0);
          int cur_mins = (g_cnt > 0 ? (int)StringToInteger(report[g_cnt - 1].mins) : 0);
          double cur_speed = (cur_mins > 0 ? (report[g_cnt - 1].pips / 10.0) / (double)cur_mins : 0.0);
-         SetLabel(UI_PREFIX + "mode_stat_1", UI_X + 188, g_ui_debug_y, "Vcur=" + DoubleToString(cur_speed, 3), clrLime);
-         SetLabel(UI_PREFIX + "mode_stat_2", UI_X + 380, g_ui_debug_y, "Vavg=" + DoubleToString(avg_speed, 3), clrLime);
+         int stat2_x = g_ui_debug_text_x + MathMax(260, g_ui_debug_text_w / 2);
+         SetLabel(UI_PREFIX + "mode_stat_1", g_ui_debug_text_x, g_ui_debug_y, "Vcur=" + DoubleToString(cur_speed, 3), clrLime);
+         SetLabel(UI_PREFIX + "mode_stat_2", stat2_x, g_ui_debug_y, "Vavg=" + DoubleToString(avg_speed, 3), clrLime);
       }
    }
 
@@ -871,6 +881,47 @@ void DrawTablePanel(const int rows, const int panel_top, const int panel_h)
    ObjectSetInteger(0, name, OBJPROP_ZORDER, -1);
 }
 
+void DrawDebugPanel(const int panel_top, const int panel_h)
+{
+   string panel = UI_PREFIX + "debug_panel";
+   string title = UI_PREFIX + "debug_title";
+   if(!g_show_debug_details)
+   {
+      ObjectDelete(0, panel);
+      ObjectDelete(0, title);
+      ObjectDelete(0, UI_PREFIX + "prob_details");
+      ObjectDelete(0, UI_PREFIX + "prob_details_2");
+      ObjectDelete(0, UI_PREFIX + "mode_stat_1");
+      ObjectDelete(0, UI_PREFIX + "mode_stat_2");
+      g_ui_debug_text_x = 0;
+      g_ui_debug_text_w = 0;
+      return;
+   }
+
+   int x = UI_X - 14;
+   int y = panel_top + panel_h + 8;
+   int w = g_ui_panel_right - x;
+   int h = 116;
+   if(w < 360) w = 360;
+
+   if(ObjectFind(0, panel) < 0)
+      ObjectCreate(0, panel, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, panel, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, panel, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, panel, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, panel, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, panel, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, panel, OBJPROP_BGCOLOR, C'248,250,255');
+   ObjectSetInteger(0, panel, OBJPROP_BORDER_COLOR, C'120,140,180');
+   ObjectSetInteger(0, panel, OBJPROP_BACK, false);
+   ObjectSetInteger(0, panel, OBJPROP_SELECTABLE, false);
+
+   SetLabel(title, x + 12, y + 18, "Диагностика", C'70,90,130');
+   g_ui_debug_y = y + 18;
+   g_ui_debug_text_x = x + 220;
+   g_ui_debug_text_w = w - 234;
+}
+
 void BuildUI()
 {
    int rows = ArraySize(g_view_symbols);
@@ -913,11 +964,11 @@ void BuildUI()
    g_ui_debug_y = debug_y;
    g_ui_panel_right = (UI_X - 14) + panel_w;
 
-   int mode_w = 300;
+   int mode_w = 304;
    int mode_x = g_ui_panel_right - mode_w - 16;
    if(mode_x < UI_X + 330)
       mode_x = UI_X + 330;
-   int dbg_toggle_w = 150;
+   int dbg_toggle_w = 220;
    int dbg_toggle_x = g_ui_panel_right - dbg_toggle_w - 16;
    if(dbg_toggle_x < UI_X + 10)
       dbg_toggle_x = UI_X + 10;
@@ -937,15 +988,11 @@ void BuildUI()
    SetButton(UI_PREFIX + "mode", mode_x, title_y - 2, mode_w, 36, mode_text, mode_bg, clrWhite);
    SetLabel(UI_PREFIX + "active", UI_X + 10, active_y, "Активный график: " + IntegerToString(g_current_filter) + " - " + TFToString(g_current_tf), C'0,120,0');
    ObjectDelete(0, UI_PREFIX + "active_hint");
+   color dbg_bg = (g_show_debug_details ? C'52,152,219' : C'170,170,170');
    SetButton(UI_PREFIX + "debug_toggle", dbg_toggle_x, debug_y - 3, dbg_toggle_w, 30,
-             (g_show_debug_details ? "[x] Debug" : "[ ] Debug"), C'235,235,235', C'0,8,127');
-   if(g_show_debug_details)
-      SetLabel(UI_PREFIX + "debug_label", UI_X + 10, debug_y, "Диагностика: ", C'100,100,100');
-   else
-   {
-      ObjectDelete(0, UI_PREFIX + "debug_label");
-      ObjectDelete(0, UI_PREFIX + "prob_details");
-   }
+             (g_show_debug_details ? "Отладка: ON" : "Отладка: OFF"), dbg_bg, clrWhite);
+   ObjectDelete(0, UI_PREFIX + "debug_label");
+   DrawDebugPanel(panel_top, panel_h);
    SetLabel(UI_PREFIX + "h_sym", UI_X + 10, header_y, "Символ", C'0,8,127');
    SetLabel(UI_PREFIX + "h_atr", UI_X + UI_SYM_W + 8, header_y, "ATR", C'0,8,127');
    string hint_text = "Формат ячейки: Вероятность % | Макс коррекция | Тек. отклонение";
