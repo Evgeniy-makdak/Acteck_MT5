@@ -9,9 +9,9 @@ UsePrevDayLevels=true
 ShowLevelsLenBars=500
 BalanceUseOpenPrice=false
 
-CZ_LookbackN=20
+CZ_LookbackN=14
 CZ_ATR_Period=14
-CZ_ATR_K=1.0
+CZ_ATR_K=1.3
 BreakCloseOffset=5
 RetestDepth=5
 WickRatio=2.0
