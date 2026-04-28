@@ -1048,26 +1048,51 @@ void BuildUI()
    }
 }
 
-void SetCell(const int row, const int col, const string text, const int trend, const bool blocked = false, const bool ready_signal = false)
+void SetCell(const int row, const int col, const string text, const int trend,
+             const bool blocked = false, const bool ready_signal = false,
+             const bool prob_alert = false, const bool corr_alert = false, const bool dev_alert = false)
 {
    string btn = UI_PREFIX + "btn_" + IntegerToString(row) + "_" + IntegerToString(col);
-   color bg = C'250,250,250', fg = C'0,8,127';
-   if(ready_signal && trend > 0) { bg = C'61,122,224';  fg = clrWhite; }   // buy-ready
-   if(ready_signal && trend < 0) { bg = C'242,153,74';  fg = clrWhite; }   // sell-ready (not red)
-   if(blocked)   { bg = C'185,45,45';  fg = clrWhite; }
-   if(row == g_active_visual_row && col == g_active_visual_col)
-   {
-      if(trend == 0 && !blocked && !ready_signal)
-         bg = C'220,240,220';
-      if(!blocked)
-         fg = C'0,90,0';
-   }
    int row_y = g_ui_row_start_y + row * UI_ROW_H;
-   SetButton(btn, UI_X + UI_SYM_W + UI_ATR_W + 14 + col * UI_COL_W, row_y - 8, UI_COL_W - 22, 42, text, bg, fg);
-   if(blocked)
-      ObjectSetInteger(0, btn, OBJPROP_BORDER_COLOR, C'140,20,20');
-   else
-      ObjectSetInteger(0, btn, OBJPROP_BORDER_COLOR, (row == g_active_visual_row && col == g_active_visual_col) ? C'0,150,0' : C'120,120,120');
+   int x = UI_X + UI_SYM_W + UI_ATR_W + 14 + col * UI_COL_W;
+   int y = row_y - 8;
+   int w = UI_COL_W - 22;
+   int h = 42;
+
+   // Main clickable frame.
+   SetButton(btn, x, y, w, h, "", C'250,250,250', C'0,8,127');
+   ObjectSetInteger(0, btn, OBJPROP_BORDER_COLOR, (row == g_active_visual_row && col == g_active_visual_col) ? C'0,150,0' : C'120,120,120');
+
+   string parts[];
+   int n = StringSplit(text, '|', parts);
+   string v1 = (n > 0 ? TrimString(parts[0]) : text);
+   string v2 = (n > 1 ? TrimString(parts[1]) : "");
+   string v3 = (n > 2 ? TrimString(parts[2]) : "");
+
+   int gap = 4;
+   int inner_w = w - 2 * gap;
+   int part_w = inner_w / 3;
+   int part_y = y + 5;
+   int part_h = h - 10;
+
+   color p1bg = C'250,250,250', p2bg = C'250,250,250', p3bg = C'250,250,250';
+   color p1fg = C'0,8,127', p2fg = C'0,8,127', p3fg = C'0,8,127';
+
+   if(ready_signal && trend > 0) { p1bg = C'61,122,224';  p1fg = clrWhite; }   // buy-ready
+   if(ready_signal && trend < 0) { p1bg = C'242,153,74';  p1fg = clrWhite; }   // sell-ready
+   if(prob_alert) { p1bg = C'185,45,45'; p1fg = clrWhite; }
+   if(corr_alert) { p2bg = C'185,45,45'; p2fg = clrWhite; }
+   if(dev_alert)  { p3bg = C'185,45,45'; p3fg = clrWhite; }
+
+   SetButton(btn + "_p1", x + gap,               part_y, part_w - 2, part_h, v1, p1bg, p1fg);
+   SetButton(btn + "_p2", x + gap + part_w,      part_y, part_w - 2, part_h, v2, p2bg, p2fg);
+   SetButton(btn + "_p3", x + gap + part_w * 2,  part_y, part_w - 2, part_h, v3, p3bg, p3fg);
+   ObjectSetInteger(0, btn + "_p1", OBJPROP_BORDER_COLOR, C'170,170,170');
+   ObjectSetInteger(0, btn + "_p2", OBJPROP_BORDER_COLOR, C'170,170,170');
+   ObjectSetInteger(0, btn + "_p3", OBJPROP_BORDER_COLOR, C'170,170,170');
+   ObjectSetInteger(0, btn + "_p1", OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, btn + "_p2", OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, btn + "_p3", OBJPROP_SELECTABLE, false);
 }
 
 string FormatCellValue(const int p, const int mx, const string dev)
@@ -1246,9 +1271,18 @@ void UpdateTable()
          int clr = 0;
          if(perc >= 60)
             clr = (is_buy ? 1 : -1);
-         bool blocked = (g_view_mode == MODE_PROBABILITY && IsProbabilitySignalBlocked(filter, max_corr_whole, max_corr, curr_dev_val));
+         double filter_pts = filter / 10.0;
+         int max_corr_trend_limit = (int)MathFloor(filter_pts * 0.80);
+         int max_corr_ext_limit   = (int)MathFloor(filter_pts * 0.60);
+         int curr_dev_limit       = (int)MathFloor(filter_pts * 0.40); // updated limit for current rollback
+         bool corr_whole_alert = (max_corr_whole >= max_corr_trend_limit);
+         bool corr_ext_alert   = (max_corr >= max_corr_ext_limit);
+         bool dev_alert        = (curr_dev_val >= curr_dev_limit);
+         bool corr_alert       = (corr_whole_alert || corr_ext_alert);
+         bool blocked = (g_view_mode == MODE_PROBABILITY && (corr_alert || dev_alert));
          bool ready_signal = (g_view_mode == MODE_PROBABILITY && perc >= 60 && !blocked);
-         SetCell(r, c, FormatCellValue(perc, max_corr_whole, curr_dev), clr, blocked, ready_signal);
+         bool prob_alert = (g_view_mode == MODE_PROBABILITY && blocked && perc >= 60);
+         SetCell(r, c, FormatCellValue(perc, max_corr_whole, curr_dev), clr, blocked, ready_signal, prob_alert, corr_alert, dev_alert);
          idx++;
       }
    }
