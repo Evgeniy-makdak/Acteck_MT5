@@ -162,6 +162,32 @@ string ResolveSymbolName(string requested)
    return best;
 }
 
+string BaseSymbol6(const string symbol_name)
+{
+   string norm = NormalizeSymbolCode(symbol_name);
+   if(StringLen(norm) >= 6)
+      return StringSubstr(norm, 0, 6);
+   return norm;
+}
+
+bool IsMajorUsdPair(const string symbol_name)
+{
+   string base6 = BaseSymbol6(symbol_name);
+   if(StringLen(base6) < 6)
+      return false;
+   string a = StringSubstr(base6, 0, 3);
+   string b = StringSubstr(base6, 3, 3);
+   // Majors in current strategy context: pairs where one side is USD.
+   return (a == "USD" || b == "USD");
+}
+
+int ProbabilityEntryThreshold(const string symbol_name)
+{
+   // Entry filter from instruction:
+   // majors >70%, crosses >85%.
+   return (IsMajorUsdPair(symbol_name) ? 71 : 86);
+}
+
 void BuildViewSymbols()
 {
    ArrayResize(g_view_symbols, 0);
@@ -1154,15 +1180,15 @@ bool IsProbabilitySignalBlocked(const int filter_raw, const int max_corr_trend, 
            curr_dev       >= curr_dev_limit);
 }
 
-void CallAlert(const int lvl, const int index)
+void CallAlert(const int lvl, const int index, const int threshold)
 {
    if(!EnableAlerts) return;
-   if(lvl >= 60 && !g_alerts[index])
+   if(lvl >= threshold && !g_alerts[index])
    {
       PlaySound("alert.wav");
       g_alerts[index] = true;
    }
-   if(lvl < 60 && g_alerts[index])
+   if(lvl < threshold && g_alerts[index])
       g_alerts[index] = false;
 }
 
@@ -1205,7 +1231,7 @@ void UpdateTable()
             double en_pr = StringToDouble(report[g_cnt - 1].end_tr_pr);
             SearchTrends(sy, tf, EffectiveEndDate(), filter, false);
             perc = CalcProbability(sy, st_pr, en_pr);
-            CallAlert(perc, idx);
+            CallAlert(perc, idx, ProbabilityEntryThreshold(sy));
          }
          else
          {
@@ -1269,7 +1295,8 @@ void UpdateTable()
          // "Max correction on the whole trend segment" must include rollback after the last extremum too.
          int max_corr_whole = MathMax(max_corr_trend, max_corr);
          int clr = 0;
-         if(perc >= 60)
+         int prob_threshold = ProbabilityEntryThreshold(sy);
+         if(perc >= prob_threshold)
             clr = (is_buy ? 1 : -1);
          double filter_pts = filter / 10.0;
          int max_corr_trend_limit = (int)MathFloor(filter_pts * 0.80);
@@ -1280,8 +1307,8 @@ void UpdateTable()
          bool dev_alert        = (curr_dev_val >= curr_dev_limit);
          bool corr_alert       = (corr_whole_alert || corr_ext_alert);
          bool blocked = (g_view_mode == MODE_PROBABILITY && (corr_alert || dev_alert));
-         bool ready_signal = (g_view_mode == MODE_PROBABILITY && perc >= 60 && !blocked);
-         bool prob_alert = (g_view_mode == MODE_PROBABILITY && blocked && perc >= 60);
+         bool ready_signal = (g_view_mode == MODE_PROBABILITY && perc >= prob_threshold && !blocked);
+         bool prob_alert = (g_view_mode == MODE_PROBABILITY && blocked && perc >= prob_threshold);
          SetCell(r, c, FormatCellValue(perc, max_corr_whole, curr_dev), clr, blocked, ready_signal, prob_alert, corr_alert, dev_alert);
          idx++;
       }
