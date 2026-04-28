@@ -1241,12 +1241,14 @@ void UpdateTable()
          int max_corr_trend = CalcMaxTrendCorrection(sy, tf, st_ext, en_ext, is_buy);
          int curr_dev_val = ToDisplayPoints(MathAbs(StringToDouble(report[g_cnt - 1].end_tr_pr) - iClose(sy, tf, 0)) / PointValue(sy));
          string curr_dev = IntegerToString(curr_dev_val);
+         // "Max correction on the whole trend segment" must include rollback after the last extremum too.
+         int max_corr_whole = MathMax(max_corr_trend, max_corr);
          int clr = 0;
          if(perc >= 60)
             clr = (is_buy ? 1 : -1);
-         bool blocked = (g_view_mode == MODE_PROBABILITY && IsProbabilitySignalBlocked(filter, max_corr_trend, max_corr, curr_dev_val));
+         bool blocked = (g_view_mode == MODE_PROBABILITY && IsProbabilitySignalBlocked(filter, max_corr_whole, max_corr, curr_dev_val));
          bool ready_signal = (g_view_mode == MODE_PROBABILITY && perc >= 60 && !blocked);
-         SetCell(r, c, FormatCellValue(perc, max_corr_trend, curr_dev), clr, blocked, ready_signal);
+         SetCell(r, c, FormatCellValue(perc, max_corr_whole, curr_dev), clr, blocked, ready_signal);
          idx++;
       }
    }
