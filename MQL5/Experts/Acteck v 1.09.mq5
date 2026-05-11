@@ -790,12 +790,6 @@ bool SendDeal(const int direction, const double volume, const double sl, const d
    if(volume <= 0)
       return false;
 
-   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED))
-   {
-      Log("Trade environment not ready: terminal or EA trading is disabled");
-      return false;
-   }
-
    MqlTradeRequest req;
    MqlTradeResult  res;
    ZeroMemory(req);
@@ -817,9 +811,26 @@ bool SendDeal(const int direction, const double volume, const double sl, const d
 
    // Startup reliability: the first signal after terminal launch may hit transient trade context/price readiness issues.
    // Retry several times on temporary errors so a valid first signal is not lost as "no deal".
-   const int max_attempts = 3;
+   const int max_attempts = 6;
    for(int attempt = 1; attempt <= max_attempts; attempt++)
    {
+      // Environmental checks INSIDE the retry loop: terminal connection and trade permissions
+      // may not be ready on the very first tick after a cold start, but will stabilise quickly.
+      if(!TerminalInfoInteger(TERMINAL_CONNECTED) ||
+         !TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ||
+         !MQLInfoInteger(MQL_TRADE_ALLOWED))
+      {
+         Log(StringFormat("Trade environment not ready (attempt %d/%d): "
+                          "connected=%d trade_allowed=%d mql_allowed=%d, retrying",
+                          attempt, max_attempts,
+                          (int)TerminalInfoInteger(TERMINAL_CONNECTED),
+                          (int)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED),
+                          (int)MQLInfoInteger(MQL_TRADE_ALLOWED)));
+         if(attempt < max_attempts)
+            Sleep(400);
+         continue;
+      }
+
       req.price = (direction > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
       if(req.price <= 0.0)
       {
@@ -854,11 +865,15 @@ bool SendDeal(const int direction, const double volume, const double sl, const d
           res.retcode == TRADE_RETCODE_CLIENT_DISABLES_AT ||
           res.retcode == TRADE_RETCODE_LOCKED);
 
-      if(attempt < max_attempts && transient)
+      // Retry both transient OrderSend return codes AND complete OrderSend failures.
+      // A complete failure (ok==false) is common right after terminal startup when the
+      // trade context is still initialising (no valid connection/symbol yet).
+      if(attempt < max_attempts && (transient || !ok))
       {
-         Log(StringFormat("OrderSend transient issue (attempt %d/%d): retcode=%d (%s), retrying",
-                          attempt, max_attempts, (int)res.retcode, res.comment));
-         Sleep(250);
+         string reason = !ok ? "OrderSend() failed" : StringFormat("retcode=%d (%s)", (int)res.retcode, res.comment);
+         Log(StringFormat("OrderSend transient issue (attempt %d/%d): %s, retrying",
+                          attempt, max_attempts, reason));
+         Sleep(400);
          continue;
       }
 
@@ -2066,7 +2081,15 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
    string msg = sig + " " + (direction > 0 ? "BUY" : "SELL") + " on " + _Symbol + " " + EnumToString(Timeframe);
    if(status != "")
       msg += " [" + status + "]";
-   Notify(msg);
+
+   // Notify blocked/disabled signals immediately (with reason in status).
+   // For clean (unblocked) trade signals the notification is deferred until
+   // the deal is confirmed open — otherwise the alert fires before SendDeal
+   // and a silent failure would show a "buy/sell" alert with no real position.
+   if(status != "" || !TradeEnabled)
+   {
+      Notify(msg);
+   }
 
    if(!TradeEnabled)
       return true;
@@ -2113,9 +2136,16 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
       trades_done++;
       MarkTradeInBar(signal_bar.time);
       Log(StringFormat("Trade opened %s vol=%.2f deal=%I64u", (direction > 0 ? "BUY" : "SELL"), volume, deal));
+
+      // Notify success only after the deal is confirmed open.
+      Notify(msg);
       return true;
    }
 
+   // If SendDeal failed despite passing all filters, notify the user
+   // so the lost trade is visible.
+   if(status == "" && TradeEnabled)
+      Notify(msg + " [SendDeal failed]");
    return false;
 }
 
