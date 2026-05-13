@@ -980,6 +980,23 @@ double ClampVolume(const double vol)
    double vmax = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
+   // Cold-start protection: symbol specification may not be loaded yet.
+   // Retry once with a small delay before giving up.
+   if(vmin <= 0.0 || vmax <= 0.0 || step <= 0.0)
+   {
+      Log(StringFormat("ClampVolume: symbol volume limits not ready (min=%.5f max=%.5f step=%.5f), retrying...", vmin, vmax, step));
+      Sleep(500);
+      vmin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+      vmax = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+      step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   }
+
+   if(vmin <= 0.0 || vmax <= 0.0 || step <= 0.0)
+   {
+      Log(StringFormat("ClampVolume: invalid symbol volume limits (min=%.5f max=%.5f step=%.5f)", vmin, vmax, step));
+      return 0.0;
+   }
+
    if(v <= 0)
       return 0.0;
 
@@ -999,12 +1016,28 @@ double CalcLotByRiskPercent(const double risk_percent, const double sl_points)
       return 0.0;
 
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(balance <= 0.0)
+      return 0.0;
+
    double risk_money = balance * risk_percent / 100.0;
 
    double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+
+   // Cold-start protection: symbol trade properties may not be loaded yet.
    if(tick_value <= 0.0 || tick_size <= 0.0)
+   {
+      Log(StringFormat("CalcLotByRiskPercent: tick data not ready (tick_value=%.5f tick_size=%.5f), retrying...", tick_value, tick_size));
+      Sleep(500);
+      tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+      tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   }
+
+   if(tick_value <= 0.0 || tick_size <= 0.0)
+   {
+      Log(StringFormat("CalcLotByRiskPercent: invalid tick data (tick_value=%.5f tick_size=%.5f)", tick_value, tick_size));
       return 0.0;
+   }
 
    double value_per_point_per_lot = (tick_value / tick_size) * PointValue();
    double risk_per_lot = sl_points * value_per_point_per_lot;
@@ -2116,11 +2149,19 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
    double volume = 0.0;
 
    if(LotMode == LOT_FIXED)
+   {
       volume = ClampVolume(Lot);
+   }
    else
    {
       double sl_points = MathAbs(entry - sl) / PointValue();
       volume = CalcLotByRiskPercent(Percent, sl_points);
+      // Fallback to fixed lot if dynamic calculation fails (cold-start / missing symbol data)
+      if(volume <= 0.0 && Lot > 0.0)
+      {
+         Log(StringFormat("Dynamic lot calc failed (sl_pts=%.1f), falling back to fixed Lot=%.2f", sl_points, Lot));
+         volume = ClampVolume(Lot);
+      }
    }
 
    if(volume <= 0.0)
