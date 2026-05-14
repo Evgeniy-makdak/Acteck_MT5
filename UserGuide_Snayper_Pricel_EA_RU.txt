@@ -1,0 +1,120 @@
+Snayper_Pricel_EA (MT5 / MQL5) — инструкция пользователя (базовая версия ТЗ v1.0)
+Версия билда: 1.08 (см. свойство #property version в .mq5)
+Версионный файл кода: Snayper_Pricel_v1.08.mq5 (источник истины для пакета)
+
+1) Назначение и зона ответственности
+- Продукт: торговый советник (EA) для MetaTrader 5.
+- Режим счёта: ОБЯЗАТЕЛЬНО hedging (поддержка нескольких позиций по символу и частичного закрытия).
+- Логика: реализация «по мотивам» и по формальным правилам ТЗ v1.0. Визуализация на графике — обязательна.
+
+2) Что входит в базовую версию (кратко)
+- Реакционные зоны (консолидация): детект по Range(N) <= K*ATR(P), прямоугольник зоны, инвалидация пробоем по ЗАКРЫТИЮ с BreakCloseOffset.
+- Сигналы A/B/C:
+  A) пробой зоны (закрытие за пределами + offset, вход на следующем баре),
+  B) «ложный пробой» (wick за пределами > WickRatio*Body, закрытие внутри),
+  C) ретест после A (возврат в зону на RetestDepth + подтверждение закрытием в сторону пробоя).
+  Опциональное подтверждение: Engulfing / OutsideBar.
+- Фильтры: EMA (по режиму) и ATR (мин. ATR_Min и/или мин-диапазон через RangeMinATR_Mult).
+- Торговый блок: рыночный вход; SL/TP (Fixed или FromZone); BE, TrailingStop, PartialClose (2 шага);
+  защиты: MaxSpread, Slippage, OnlyOneTradePerBar, ReEntries, MaxPositions.
+- «Проторговка»: свинг-линия (Fractals или ZigZag-like).
+- Уровни дня: HOD/LOD/Balance (текущий день + опционально предыдущий).
+- Подсветка входа: прямоугольник + текст (Entry/SL/TP) + опциональная стрелка.
+
+3) Установка (MT5)
+3.1. Ручная установка из исходника (.mq5)
+1) Откройте MetaEditor (MT5) → File → Open Data Folder → MQL5 → Experts
+2) Скопируйте файл Snayper_Pricel_v1.08.mq5 в папку Experts
+3) Перезапустите MetaEditor или обновите Navigator
+4) Откройте файл и нажмите Compile
+
+3.2. Установка из готового билда (.ex5)
+1) Откройте Data Folder → MQL5 → Experts
+2) Скопируйте Snayper_Pricel_v1.08.ex5 в папку Experts
+3) Перезапустите MT5 или обновите Navigator
+
+4) Быстрый старт (рекомендуется)
+Цель первого запуска — проверить сигналы и визуализацию БЕЗ открытия сделок.
+
+Рекомендуемый стенд:
+- Symbol: EURUSD
+- Timeframe: M5
+- TradeEnabled = false (только сигналы)
+- EnableSignalA/B/C = true
+- MaxPositions = 1
+
+Как запустить в Strategy Tester:
+1) View → Strategy Tester
+2) Expert: Snayper_Pricel_v1.08
+3) Symbol: EURUSD, Period: M5
+4) Включите «Visual mode» для визуальной проверки зон/уровней/маркеров
+5) В Inputs загрузите пресет: Presets/Snayper_Pricel_v1.08_SIGNALS_ONLY.set
+6) Запустите тест (Start) и проверьте:
+   - зоны и их инвалидацию,
+   - сигналы A/B/C и подсветку входа,
+   - логи причин блокировок (если есть фильтры/ограничения).
+
+5) Режимы работы
+5.1. Детерминированный режим (по умолчанию)
+- IntrabarMode = false.
+- Условия и сигналы оцениваются на закрытии бара. Результаты должны быть повторяемыми при одинаковых входных.
+
+5.2. Intrabar-режим (опционально)
+- IntrabarMode = true.
+- Условия пересчитываются внутри текущей свечи каждые IntrabarSeconds.
+- Важно: intrabar может давать отличающиеся результаты на разных тиковых потоках/брокерах.
+
+6) Ключевые параметры (краткий справочник)
+6.1. Общие
+- Timeframe: таймфрейм анализа (например, M5).
+- DayStartHour: час начала суток (по времени брокера).
+- UsePrevDayLevels: показывать уровни предыдущего дня.
+- ShowLevelsLenBars: длина линий уровней в барах.
+- BalanceUseOpenPrice: Balance = (HOD+LOD)/2 либо цена открытия дня.
+
+6.2. Зоны
+- CZ_LookbackN: количество баров для оценки консолидации.
+- CZ_ATR_Period: период ATR для порогового значения.
+- CZ_ATR_K: множитель ATR.
+- BreakCloseOffset: минимальный «выход» цены за границу на ЗАКРЫТИИ (в пунктах).
+- WickRatio: коэффициент для B-сигнала (wick > WickRatio*body).
+- RetestDepth: глубина возврата в зону для C-сигнала (в пунктах).
+- ConfirmPattern: Off / Engulfing / OutsideBar.
+
+6.3. Фильтры
+- EMA_Period: период EMA (0 = выкл.).
+- EMA_FilterMode: Price / Close / BarClose.
+- ATR_Min: минимальный ATR (в пунктах) для разрешения входов.
+- RangeMinATR_Mult: минимальный диапазон бара (m*ATR), 0 = выкл.
+
+6.4. Торговля и риск
+- TradeEnabled: true = торговля, false = только сигналы.
+- LotMode: Fixed или PercentRisk.
+- SL_Mode / TP_Mode: Fixed или FromZone (+ offsets).
+- UseBE, UseTS, PartialClose_On: сопровождение позиций.
+- PC_Step1/PC_Vol1, PC_Step2/PC_Vol2: 2 шага частичного закрытия.
+- MaxSpread, Slippage: защита от «плохих» условий.
+- OnlyOneTradePerBar: не более 1 сделки на бар.
+- ReEntries: дополнительные входы в рамках зоны.
+- MaxPositions: лимит позиций EA по символу.
+- MagicNumber, CommentPrefix: идентификация сделок/объектов.
+
+6.5. Визуализация / уведомления
+- ShowZones: показывать зоны.
+- ShowEntryMarker: показывать маркеры входа (Entry/SL/TP).
+- KeepSignalHistory: сохранять историю сигналов.
+- ShowArrows: стрелки.
+- AlertsMode: Off / OnScreen / Push.
+
+7) Логи и диагностика
+- Основные причины блокировки входа пишутся в Journal/Experts:
+  - spread > MaxSpread
+  - MaxPositions reached
+  - OnlyOneTradePerBar
+  - Entry blocked by EMA/ATR
+  - ReEntries limit reached
+- При TradeEnabled=false управление позициями (BE/TS/PartialClose) не выполняется.
+
+8) Ограничения (важно)
+- Сессионные уровни Asia/London/New York и прочие «расширения» не входят в базовую версию ТЗ.
+- Разница котировок/тиков между брокерами может менять отдельные сигналы — это не считается дефектом, если правила ТЗ не нарушены.
