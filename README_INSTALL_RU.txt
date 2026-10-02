@@ -1,15 +1,20 @@
 Acteck v 4.1 — установка
 ========================
-1) MetaEditor: открыть MQL5/Experts/Acteck v 4.1.mq5 → F7 (Compile)
-2) MT5: перетащить советник на график нужной пары
-3) Inputs → Load пресет:
+1) MetaEditor: Acteck v 4.1.mq5 → F7 (Compile)
+2) Откройте график пары и ВРУЧНУЮ выставьте период:
+     calm / scalp → M5
+     swing_H1     → H1
+   (пресет период окна графика НЕ переключает!)
+3) Перетащите советник на график
+4) Inputs → «Загрузить» / Load:
      Acteck_v4.1_<PAIR>_calm.set | _scalp.set | _swing_H1.set
      PAIR = EURUSD | GBPUSD | USDJPY | USDCHF
-     (файлов без _calm/_scalp/_swing_H1 нет — это были дубли)
-4) Обучение: TradeEnabled=false
-5) Скорость вручную: SpeedPreset = SCALP / CALM / SWING / CUSTOM → OK
-   (разметка перерисуется автоматически)
+5) OK. Проверьте, что Inputs → Timeframe совпадает с периодом графика
+6) Обучение: TradeEnabled=false
+7) Структуры ЗУ/ПД/каскад/12 паттернов по умолчанию ВЫКЛ —
+   включение: Inputs → ShowDecisionZones / ShowPullbackZones / …
+   (подробно в UserGuide_Snayper_Pricel_EA_RU.txt п.3b)
 
 Шпаргалка: UserGuide_Snayper_Pricel_EA_RU.txt
-Руководство PDF: Acteck_v4.1_Manual_RU.pdf
+PDF: Acteck_v4.1_Manual_RU.pdf
 ТЗ: TZ_Snayper_Pricel_MT5.txt
