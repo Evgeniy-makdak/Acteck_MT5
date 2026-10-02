@@ -3540,93 +3540,97 @@ void ClearStructureObjects()
 
 void DrawFib30Line(const MqlRates &rates[])
 {
-   // Стандартное Fib текущего хода (как сказал пользователь):
-   //   Точка 1 = самый последний экстремум, от которого началось ТЕКУЩЕЕ движение
-   //            (откат от лоя → минимум; откат от хая → максимум)
-   //   Точка 2 = противоположный край этого же хода (к хаю / к лою)
-   //   «30» = Точка1 + 0.3×(Точка2 − Точка1)  // 30% пути от Т1 к Т2
+   // Стандартный OBJ_FIBO: от нижней точки к верхней. Только уровень 30%.
+   // Т1 = последний экстремум хода; противоположный край = второй якорь;
+   // всегда price1=min, price2=max → уровень 0.3 = min+0.3*(max−min).
    if(!ShowFib30)
       return;
 
    string zb = Prefix() + "FIB30_BAND";
-   if(ObjExists(zb)) ObjectDelete(0, zb);
+   string fold = Prefix() + "FIB30_T"; // старая текстовая метка
    string fn = Prefix() + "FIB30";
-   string ft = Prefix() + "FIB30_T";
-   const int nr = ArraySize(rates);
-   if(nr < 30)
+   if(ObjExists(zb)) ObjectDelete(0, zb);
+   if(ObjExists(fold)) ObjectDelete(0, fold);
+
+   if(ArraySize(rates) < 30)
    {
       if(ObjExists(fn)) ObjectDelete(0, fn);
-      if(ObjExists(ft)) ObjectDelete(0, ft);
       return;
    }
 
    SPivot swings[];
-   if(!BuildSwingPointsTF(rates, swings, 48, EffectiveSwingDepth()) || ArraySize(swings) < 1)
+   if(!BuildSwingPointsTF(rates, swings, 48, EffectiveSwingDepth()) || ArraySize(swings) < 2)
    {
       if(ObjExists(fn)) ObjectDelete(0, fn);
-      if(ObjExists(ft)) ObjectDelete(0, ft);
       return;
    }
    const int ns = ArraySize(swings);
-   // Точка 1 — последний свинг-экстремум
-   SPivot p1 = swings[ns - 1];
-   const datetime t1piv = p1.t;
-   const double   v1    = p1.p;
 
-   // Точка 2 — экстремум цены после Точки 1 (текущий ход)
-   double v2 = v1;
-   bool have = false;
-   for(int i = 0; i < nr; i++)
+   // Последний экстремум + противоположный свинг ДО него = границы текущего хода
+   SPivot last = swings[ns - 1];
+   SPivot opp;
+   bool have_opp = false;
+   for(int j = ns - 2; j >= 0; j--)
    {
-      if(rates[i].time < t1piv) break; // series: дальше только старее пивота
-      if(p1.type < 0)
-      {
-         // от минимума → к максимуму хода
-         if(!have || rates[i].high > v2)
-         { v2 = rates[i].high; have = true; }
-      }
-      else if(p1.type > 0)
-      {
-         // от максимума → к минимуму хода
-         if(!have || rates[i].low < v2)
-         { v2 = rates[i].low; have = true; }
-      }
+      if(last.type < 0 && swings[j].type == 1)
+      { opp = swings[j]; have_opp = true; break; }
+      if(last.type > 0 && swings[j].type == -1)
+      { opp = swings[j]; have_opp = true; break; }
    }
-   if(!have || MathAbs(v2 - v1) <= PointValue() * 5.0)
+   if(!have_opp)
    {
       if(ObjExists(fn)) ObjectDelete(0, fn);
-      if(ObjExists(ft)) ObjectDelete(0, ft);
       return;
    }
 
-   // 30% от Точки1 к Точке2 (стандартная доля хода)
-   double fib = v1 + (v2 - v1) * (ZU_SizePctOfMove / 100.0);
-   double lo = MathMin(v1, v2);
-   double hi = MathMax(v1, v2);
-   if(fib < lo || fib > hi)
+   // Всегда: нижняя → верхняя
+   double price_lo, price_hi;
+   datetime time_lo, time_hi;
+   if(last.p < opp.p)
+   {
+      price_lo = last.p; time_lo = last.t;
+      price_hi = opp.p;  time_hi = opp.t;
+   }
+   else
+   {
+      price_lo = opp.p;  time_lo = opp.t;
+      price_hi = last.p; time_hi = last.t;
+   }
+   if(price_hi - price_lo <= PointValue() * 5.0)
    {
       if(ObjExists(fn)) ObjectDelete(0, fn);
-      if(ObjExists(ft)) ObjectDelete(0, ft);
       return;
    }
 
-   datetime t1 = t1piv;
-   datetime t2 = rates[0].time + (datetime)(PeriodSeconds(Timeframe) * MathMax(8, SightBarsWidth));
-
+   // Стандартный Fib: первая точка = низ, вторая = верх
    if(!ObjExists(fn))
-      ObjectCreate(0, fn, OBJ_TREND, 0, t1, fib, t2, fib);
-   ObjectMove(0, fn, 0, t1, fib);
-   ObjectMove(0, fn, 1, t2, fib);
+   {
+      if(!ObjectCreate(0, fn, OBJ_FIBO, 0, time_lo, price_lo, time_hi, price_hi))
+         return;
+   }
+   else
+   {
+      ObjectMove(0, fn, 0, time_lo, price_lo);
+      ObjectMove(0, fn, 1, time_hi, price_hi);
+   }
+
    ObjectSetInteger(0, fn, OBJPROP_COLOR, ColorFib30);
-   ObjectSetInteger(0, fn, OBJPROP_STYLE, STYLE_SOLID);
-   ObjectSetInteger(0, fn, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, fn, OBJPROP_STYLE, STYLE_DOT);
+   ObjectSetInteger(0, fn, OBJPROP_WIDTH, 1);
    ObjectSetInteger(0, fn, OBJPROP_RAY_RIGHT, false);
+   ObjectSetInteger(0, fn, OBJPROP_RAY_LEFT, false);
    ObjectSetInteger(0, fn, OBJPROP_BACK, false);
    ObjectSetInteger(0, fn, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, fn, OBJPROP_HIDDEN, true);
    ObjectSetInteger(0, fn, OBJPROP_ZORDER, 50);
-   DrawText(ft, t2, fib, "30", ColorFib30, ANCHOR_LEFT_LOWER);
-   ObjectSetInteger(0, ft, OBJPROP_FONTSIZE, 9);
-   ObjectSetInteger(0, ft, OBJPROP_ZORDER, 51);
+
+   // Только уровень 30% (0.3) — остальные убрать
+   ObjectSetInteger(0, fn, OBJPROP_LEVELS, 1);
+   ObjectSetDouble(0, fn, OBJPROP_LEVELVALUE, 0, 0.30);
+   ObjectSetString(0, fn, OBJPROP_LEVELTEXT, 0, "30");
+   ObjectSetInteger(0, fn, OBJPROP_LEVELCOLOR, 0, ColorFib30);
+   ObjectSetInteger(0, fn, OBJPROP_LEVELSTYLE, 0, STYLE_SOLID);
+   ObjectSetInteger(0, fn, OBJPROP_LEVELWIDTH, 0, 2);
 }
 
 void DrawStructureZone(const SStructureZone &z)
