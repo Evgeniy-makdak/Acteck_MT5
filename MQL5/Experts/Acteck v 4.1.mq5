@@ -159,12 +159,12 @@ input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
 input int                  ZZ_Depth             = 12;
 input int                  ZZ_Deviation         = 5;      // points
 input int                  ZZ_Backstep          = 3;
-input bool                 ShowSwingLine        = true;
+input bool                 ShowSwingLine        = false; // UI: меньше линий
 
 // Graphics / alerts
 input bool                 ShowZones            = true;
 input bool                 ShowEntryMarker      = true;
-input bool                 KeepSignalHistory    = true;
+input bool                 KeepSignalHistory    = false; // UI: не копить старые маркеры
 input bool                 ShowArrows           = true;
 input ENUM_ALERTS_MODE     AlertsMode           = ALERTS_ONSCREEN;
 
@@ -187,7 +187,7 @@ input color                ColorSellMarker      = clrTomato;
 //=========================
 input group "=== Sniper: Sessions ==="
 input bool                 ShowSessionLevels    = true;
-input int                  SessionLookbackDays  = 3;      // completed sessions to keep
+input int                  SessionLookbackDays  = 1;      // UI: меньше сессионных линий
 input int                  AsiaStartHour        = 0;      // server time
 input int                  AsiaEndHour          = 8;
 input int                  LondonStartHour      = 8;
@@ -200,10 +200,10 @@ input color                ColorLondon          = clrDodgerBlue;
 input color                ColorNY              = clrTomato;
 
 input group "=== Sniper: Liquidity zones ==="
-input bool                 ShowLiquidityZones   = true;
+input bool                 ShowLiquidityZones   = false; // UI: выкл. по умолчанию
 input int                  LiqPivotDepth        = 3;
 input double               LiqZoneATR_Mult      = 0.35;   // zone height = mult * ATR
-input int                  MaxLiquidityZones    = 8;
+input int                  MaxLiquidityZones    = 3;
 input int                  LiqLookbackBars      = 250;
 input color                ColorSupplyZone      = clrMistyRose;
 input color                ColorDemandZone      = clrPowderBlue;
@@ -214,8 +214,8 @@ input bool                 RequireSightForEntry = false;  // if true, entries on
 input double               SightATR_Height      = 1.2;    // sight vertical size in ATR
 input int                  SightBarsWidth       = 18;     // bars to the right
 input double               SightNearATR         = 1.5;    // attach sight near level within ATR
-input color                ColorSightBuy        = clrPaleTurquoise;
-input color                ColorSightSell       = clrLightCoral;
+input color                ColorSightBuy        = clrDeepSkyBlue; // ярче, чтобы прицел читался
+input color                ColorSightSell       = clrOrangeRed;
 
 input group "=== Sniper: Probability HUD ==="
 input bool                 ShowProbabilityHUD   = true;
@@ -235,10 +235,10 @@ input bool                 AlignBreakoutWithSight = true; // Signal A: не вх
 input bool                 MarkPreciseArrows    = true;   // крупные стрелки точного входа на закрытии бара
 
 input group "=== Sniper: Structures (ЗУ / ПД / Каскад / РМ) ==="
-input bool                 ShowDecisionZones    = true;   // Зоны принятия решения (ЗУ)
-input bool                 ShowPullbackZones    = true;   // Зоны отката (ПД)
-input bool                 ShowCascadeMarks     = true;   // Каскады
-input bool                 ShowReversalMoments  = true;   // Разворотные моменты (РМ)
+input bool                 ShowDecisionZones    = false;  // UI: ЗУ выкл. (вкл. при необходимости)
+input bool                 ShowPullbackZones    = false;
+input bool                 ShowCascadeMarks     = false;
+input bool                 ShowReversalMoments  = false;
 input ENUM_SPEED_PRESET    SpeedPreset          = SPEED_CALM; // скальп / спокойный / свинги — для ЛЮБОЙ пары
 input int                  IndicatorSpeed       = 8;      // глубина, если SpeedPreset=CUSTOM (2..60)
 input int                  StructureLookbackBars = 250;    // баров истории для структур
@@ -249,7 +249,7 @@ input double               ZU_HeightATR_Mult    = 0.35;   // высота ЗУ �
 input int                  RM_ImpulseBars       = 4;      // баров импульса для РМ
 input double               RM_ImpulseATR_Mult   = 1.2;    // мин. импульс в ATR
 input double               RM_StallBodyATR_Max  = 0.35;   // макс. тело свечи "остановки"
-input int                  MaxStructureZones    = 16;
+input int                  MaxStructureZones    = 4;
 input color                ColorZU_Buy          = clrPaleTurquoise;
 input color                ColorZU_Sell         = clrBurlyWood;
 input color                ColorPD_Zone         = clrPowderBlue;
@@ -263,8 +263,9 @@ input int                  FrankfurtEndHour     = 10;
 input color                ColorFrankfurt       = clrPaleGreen;
 
 input group "=== Sniper: 12 Patterns ==="
-input bool                 ShowAll12Patterns    = true;   // именованные паттерны 01..12
-input bool                 ShowPatternPercents  = true;   // точные % на метках
+input bool                 ShowAll12Patterns    = false;  // UI: не рисовать все 12
+input bool                 ShowPatternPercents  = false;
+input bool                 ShowStructureLabels  = false;  // подписи ЗУ/ПД/каскад (шум)
 input double               PD_BreakoutPct       = 123.0;  // ПД: выход ≥% ширины диапазона
 input double               ZU_SizePctOfMove     = 30.0;   // размер ЗУ = % от движения
 input double               CascadeRetrace50Pct  = 50.0;   // каскад 3: откат ≤%
@@ -277,12 +278,12 @@ input group "=== Sniper: Dual TF (M1+M15) ==="
 input bool                 UseVirtualTF         = true;   // как в Sniper-Pro
 input ENUM_TIMEFRAMES      FastTF               = PERIOD_M1;
 input ENUM_TIMEFRAMES      SlowTF               = PERIOD_M15;
-input bool                 ShowSlowTFStructures = true;   // рисовать структуры SlowTF
+input bool                 ShowSlowTFStructures = false;  // UI: M15-разметка выкл.
 input bool                 RequireMTFConfluence = false;  // вход только при совпадении направлений
 input color                ColorSlowTF          = clrGold;
 
 input group "=== Sniper: Balance RSI ==="
-input bool                 ShowBalanceRSI       = true;
+input bool                 ShowBalanceRSI       = false;
 input int                  BalanceRSI_Period    = 14;
 input double               BalanceRSI_OB        = 70.0;   // перекупленность
 input double               BalanceRSI_OS        = 30.0;   // перепроданность
@@ -290,22 +291,22 @@ input bool                 FilterByBalanceRSI   = false;  // фильтр вхо
 input color                ColorBalanceRSI      = clrWhite;
 
 input group "=== Sniper: Boundaries channel ==="
-input bool                 ShowBoundariesChannel = true;  // канал «границы»
+input bool                 ShowBoundariesChannel = false;
 input int                  BoundariesLookback   = 48;     // баров для high/low канала
 input color                ColorBoundaries      = clrSilver;
 input bool                 PreferEntryInChannel = false;  // мягкий приоритет входа у границ
 
 input group "=== Sniper: 10 Alerts ==="
-input bool                 Alert_RM             = true;
-input bool                 Alert_Pattern        = true;
-input bool                 Alert_ZU             = true;
-input bool                 Alert_PD             = true;
-input bool                 Alert_Cascade        = true;
-input bool                 Alert_Sight          = true;
-input bool                 Alert_Session        = true;
-input bool                 Alert_Entry          = true;
-input bool                 Alert_Cancel         = true;
-input bool                 Alert_MTF            = true;
+input bool                 Alert_RM             = false;
+input bool                 Alert_Pattern        = false;
+input bool                 Alert_ZU             = false;
+input bool                 Alert_PD             = false;
+input bool                 Alert_Cascade        = false;
+input bool                 Alert_Sight          = false;
+input bool                 Alert_Session        = false;
+input bool                 Alert_Entry          = true;  // ЕДИНСТВЕННЫЙ алерт по умолчанию
+input bool                 Alert_Cancel         = false;
+input bool                 Alert_MTF            = false;
 input int                  AlertCooldownSec     = 30;     // антиспам
 
 // Recalc mode (оптимально): % живой, сторона прицела — на закрытии бара
@@ -2236,34 +2237,23 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
 	// For object names we need a stable unique id.
 	string base = Prefix() + "SIG_" + TimeToObjectId(bar.time) + "_" + sig;
 
-   // rectangle highlight
+   // Компактный маркер: без «простыни» SL/TP на графике
    DrawRect(base + "_R", t1, bar.high, t2, bar.low, fill, true, true);
 
-   // text label
-   string dir_ru = (direction > 0) ? "ПОКУПКА" : "ПРОДАЖА";
-   string head = "Сигнал " + sig + " " + dir_ru;
-   if(status != "")
-      head += " [" + status + "]";
-
-   string txt = head + "\n" +
-                "Вход: " + DoubleToString(entry, DigitsValue()) + "\n" +
-                "SL: " + DoubleToString(sl, DigitsValue()) + "\n" +
-                "TP: " + DoubleToString(tp, DigitsValue());
-
-   double text_price = (direction > 0) ? (bar.low - 8*PointValue()) : (bar.high + 8*PointValue());
-   ENUM_ANCHOR_POINT anch = (direction > 0) ? ANCHOR_RIGHT_UPPER : ANCHOR_RIGHT_LOWER;
-   DrawText(base + "_T", t2, text_price, txt, c, anch);
+   string tip = (direction > 0) ? ("▲ " + sig + " BUY") : ("▼ " + sig + " SELL");
+   double text_price = (direction > 0) ? (bar.low - 10*PointValue()) : (bar.high + 10*PointValue());
+   DrawText(base + "_T", t1, text_price, tip, c,
+            (direction > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
+   ObjectSetInteger(0, base + "_T", OBJPROP_FONTSIZE, 10);
+   ObjectSetInteger(0, base + "_T", OBJPROP_ZORDER, 90);
 
    if(ShowArrows)
    {
       double arrow_price = (direction > 0)
-         ? (bar.low - 12 * PointValue())
-         : (bar.high + 12 * PointValue());
+         ? (bar.low - 18 * PointValue())
+         : (bar.high + 18 * PointValue());
       DrawArrow(base + "_A", t1, arrow_price, (direction > 0), c);
-
-      string tip = (direction > 0) ? "ВХОД ВВЕРХ" : "ВХОД ВНИЗ";
-      DrawText(base + "_TIP", t1, arrow_price, tip, c,
-               (direction > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
+      ObjectSetInteger(0, base + "_A", OBJPROP_ZORDER, 91);
    }
 }
 
@@ -2751,10 +2741,11 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
       t1 = rates[0].time;
    datetime t2 = rates[0].time + (datetime)(sec * MathMax(6, SightBarsWidth));
 
-   color fill = ToARGB((g_sightDirection > 0) ? ColorSightBuy : ColorSightSell, 70);
-   color border = (g_sightDirection > 0) ? ColorLondon : ColorNY;
-   string label = (g_sightDirection > 0) ? "Прицел ПОКУПКА" : "Прицел ПРОДАЖА";
-   double label_price = g_sightHigh + 3 * PointValue();
+   // Прицел — поверх остальной разметки (высокий ZORDER, яркая рамка)
+   color fill = ToARGB((g_sightDirection > 0) ? ColorSightBuy : ColorSightSell, 95);
+   color border = (g_sightDirection > 0) ? clrDodgerBlue : clrOrangeRed;
+   string label = (g_sightDirection > 0) ? "▶ ПРИЦЕЛ BUY" : "▶ ПРИЦЕЛ SELL";
+   double label_price = g_sightHigh + 8 * PointValue();
 
    const bool need_rebuild = force_recreate
       || !ObjExists(box) || !ObjExists(tl) || !ObjExists(txt)
@@ -2763,33 +2754,42 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
    if(need_rebuild)
    {
       DeleteObjectsWithPrefix(Prefix() + "SIGHT_");
-      DrawRect(box, t1, g_sightHigh, t2, g_sightLow, fill, true, true);
+      DrawRect(box, t1, g_sightHigh, t2, g_sightLow, fill, false, true); // BACK=false — поверх
+      ObjectSetInteger(0, box, OBJPROP_ZORDER, 100);
 
       ObjectCreate(0, tl, OBJ_RECTANGLE, 0, t1, g_sightHigh, t2, g_sightLow);
       ObjectSetInteger(0, tl, OBJPROP_COLOR, border);
-      ObjectSetInteger(0, tl, OBJPROP_STYLE, STYLE_DASH);
-      ObjectSetInteger(0, tl, OBJPROP_WIDTH, 1);
+      ObjectSetInteger(0, tl, OBJPROP_STYLE, STYLE_SOLID);
+      ObjectSetInteger(0, tl, OBJPROP_WIDTH, 3);
       ObjectSetInteger(0, tl, OBJPROP_FILL, false);
       ObjectSetInteger(0, tl, OBJPROP_BACK, false);
+      ObjectSetInteger(0, tl, OBJPROP_ZORDER, 101);
       ObjectSetInteger(0, tl, OBJPROP_SELECTABLE, false);
 
       DrawText(txt, t1, label_price, label, border, ANCHOR_LEFT_LOWER);
+      ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 11);
+      ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
       g_sightDrawnDirection = g_sightDirection;
       return;
    }
 
-   // Только продление/подстройка координат — объекты остаются на графике
    ObjectMove(0, box, 0, t1, g_sightHigh);
    ObjectMove(0, box, 1, t2, g_sightLow);
    ObjectSetInteger(0, box, OBJPROP_COLOR, fill);
+   ObjectSetInteger(0, box, OBJPROP_BACK, false);
+   ObjectSetInteger(0, box, OBJPROP_ZORDER, 100);
 
    ObjectMove(0, tl, 0, t1, g_sightHigh);
    ObjectMove(0, tl, 1, t2, g_sightLow);
    ObjectSetInteger(0, tl, OBJPROP_COLOR, border);
+   ObjectSetInteger(0, tl, OBJPROP_WIDTH, 3);
+   ObjectSetInteger(0, tl, OBJPROP_ZORDER, 101);
 
    ObjectMove(0, txt, 0, t1, label_price);
    ObjectSetString(0, txt, OBJPROP_TEXT, label);
    ObjectSetInteger(0, txt, OBJPROP_COLOR, border);
+   ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 11);
+   ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
 }
 
 // Внутри бара: НЕ меняем сторону и НЕ удаляем прицел (никакого мигания/пропажи)
@@ -3319,7 +3319,7 @@ bool AlertTypeEnabled(const int t)
       case ALT_CANCEL:   return Alert_Cancel;
       case ALT_MTF:      return Alert_MTF;
    }
-   return true;
+   return false;
 }
 
 void FireSniperAlert(const int alert_type, const string detail)
@@ -3372,23 +3372,30 @@ void DrawStructureZone(const SStructureZone &z)
    if(!z.valid)
       fill_c = clrDarkGray;
 
-   color fill = ToARGB(fill_c, (z.kind == SK_RM) ? 40 : (z.valid ? 55 : 30));
+   // Структуры — на заднем плане, слабая заливка (прицел поверх)
+   color fill = ToARGB(fill_c, (z.kind == SK_RM) ? 25 : (z.valid ? 28 : 18));
    DrawRect(base + "_BOX", z.t1, z.high, z.t2, z.low, fill, true, true);
+   ObjectSetInteger(0, base + "_BOX", OBJPROP_ZORDER, 1);
 
    ObjectCreate(0, base + "_OL", OBJ_RECTANGLE, 0, z.t1, z.high, z.t2, z.low);
    ObjectSetInteger(0, base + "_OL", OBJPROP_COLOR, fill_c);
-   ObjectSetInteger(0, base + "_OL", OBJPROP_STYLE, z.valid ? STYLE_DASH : STYLE_DOT);
+   ObjectSetInteger(0, base + "_OL", OBJPROP_STYLE, STYLE_DOT);
    ObjectSetInteger(0, base + "_OL", OBJPROP_WIDTH, 1);
    ObjectSetInteger(0, base + "_OL", OBJPROP_FILL, false);
-   ObjectSetInteger(0, base + "_OL", OBJPROP_BACK, false);
+   ObjectSetInteger(0, base + "_OL", OBJPROP_BACK, true);
+   ObjectSetInteger(0, base + "_OL", OBJPROP_ZORDER, 1);
    ObjectSetInteger(0, base + "_OL", OBJPROP_SELECTABLE, false);
 
-   string lbl = z.label;
-   if(ShowPatternPercents && z.pct > 0.0)
-      lbl = StringFormat("%s | %.0f%%", z.label, z.pct);
-   if(StringLen(z.tf_tag) > 0)
-      lbl = z.tf_tag + " " + lbl;
-   DrawText(base + "_LBL", z.t1, z.high + 3 * PointValue(), lbl, fill_c, ANCHOR_LEFT_LOWER);
+   if(ShowStructureLabels)
+   {
+      string lbl = z.label;
+      if(ShowPatternPercents && z.pct > 0.0)
+         lbl = StringFormat("%s | %.0f%%", z.label, z.pct);
+      if(StringLen(z.tf_tag) > 0)
+         lbl = z.tf_tag + " " + lbl;
+      DrawText(base + "_LBL", z.t1, z.high + 3 * PointValue(), lbl, fill_c, ANCHOR_LEFT_LOWER);
+      ObjectSetInteger(0, base + "_LBL", OBJPROP_FONTSIZE, 7);
+   }
 }
 
 void PushStructureZoneEx(const int kind, const int pattern, const int direction,
@@ -4062,12 +4069,21 @@ void UpdateDualTFStructures()
 {
    if(!UseVirtualTF)
       return;
+   // UI-режим: не плодить разметку M1/M15 на графике, если выкл.
+   if(!ShowSlowTFStructures && !RequireMTFConfluence)
+      return;
 
    int need = MathMax(400, StructureLookbackBars + 50);
    int depth = EffectiveSwingDepth();
 
-   // Fast TF (обычно M1) — если не совпадает с ТФ графика
-   if(FastTF != Timeframe)
+   if(ShowSlowTFStructures && FastTF != Timeframe)
+   {
+      MqlRates fast[];
+      ArraySetAsSeries(fast, true);
+      if(CopyRates(_Symbol, FastTF, 0, need, fast) >= 80)
+         RunPatternEngineOnRates(fast, ShortTFName(FastTF), MathMax(2, depth / 2));
+   }
+   else if(RequireMTFConfluence && FastTF != Timeframe)
    {
       MqlRates fast[];
       ArraySetAsSeries(fast, true);
@@ -4075,8 +4091,9 @@ void UpdateDualTFStructures()
          RunPatternEngineOnRates(fast, ShortTFName(FastTF), MathMax(2, depth / 2));
    }
 
-   // Slow TF (обычно M15) — глубина = IndicatorSpeed
-   if(!ShowSlowTFStructures || SlowTF == Timeframe)
+   if(!ShowSlowTFStructures && !RequireMTFConfluence)
+      return;
+   if(SlowTF == Timeframe)
       return;
    MqlRates slow[];
    ArraySetAsSeries(slow, true);
@@ -4157,9 +4174,14 @@ void UpdateSniperStructures(const MqlRates &rates[])
    UpdateDualTFStructures();
    CheckMTFConfluenceAlert();
 
+   string chart_tag = ShortTFName(Timeframe);
    for(int i = 0; i < ArraySize(g_structZones); i++)
    {
       if(!g_structZones[i].valid && g_structZones[i].kind != SK_CASCADE && g_structZones[i].kind != SK_ZU)
+         continue;
+      // не рисовать чужие ТФ, если ShowSlowTFStructures=false
+      if(!ShowSlowTFStructures && StringLen(g_structZones[i].tf_tag) > 0
+         && g_structZones[i].tf_tag != chart_tag)
          continue;
       DrawStructureZone(g_structZones[i]);
    }
@@ -4520,18 +4542,12 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
 
    VisualizeSignal(sig, direction, vis_bar, entry, sl, tp, status);
 
-   string msg = sig + " " + (direction > 0 ? "BUY" : "SELL") + " on " + _Symbol + " " + EnumToString(Timeframe);
-   if(status != "")
-      msg += " [" + status + "]";
-
-   // Notify blocked/disabled signals immediately (with reason in status).
-   // For clean (unblocked) trade signals the notification is deferred until
-   // the deal is confirmed open — otherwise the alert fires before SendDeal
-   // and a silent failure would show a "buy/sell" alert with no real position.
-   if(status != "" || !TradeEnabled)
-   {
-      Notify(msg);
-   }
+   // Алерт ТОЛЬКО при появлении стрелки входа (не на зоны/прицел/сессии/блокировки)
+   string msg = sig + " " + (direction > 0 ? "BUY" : "SELL") + " " + _Symbol;
+   if(ShowArrows)
+      FireSniperAlert(ALT_ENTRY, msg);
+   else
+      Log(msg + (status != "" ? (" [" + status + "]") : ""));
 
    if(!TradeEnabled)
       return true;
@@ -4593,8 +4609,8 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
       MarkTradeInBar(signal_bar.time);
       Log(StringFormat("Trade opened %s vol=%.2f deal=%I64u P=%d", (direction > 0 ? "BUY" : "SELL"), volume, deal, prob));
 
-      // Notify success only after the deal is confirmed open.
-      FireSniperAlert(ALT_ENTRY, msg);
+      // Стрелочный алерт уже отправлен выше; здесь только лог сделки
+      Log(StringFormat("Deal OK %s", msg));
       return true;
    }
 
