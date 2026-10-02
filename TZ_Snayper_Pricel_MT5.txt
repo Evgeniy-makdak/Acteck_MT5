@@ -41,9 +41,12 @@
 1.7 Модули «Снайпер» (паритет)
   • Сессии: Asia, Frankfurt, London, New York.
   • Зоны ликвидности Supply/Demand.
-  • Прицел (Sight): сторона на close, % динамический.
+  • Прицел (Sight): сторона на close; высота = SightATR_Height×ATR;
+    ширина по барам из Inputs; при SightLevelsLive — лёгкое «дыхание».
   • Probability HUD.
   • Структуры: ЗУ (расширение), ПД (откат), каскад, РМ.
+  • Линия «30» (ShowFib30): 0%=конец импульса ПД/ЗУ, 100%=начало;
+    без оранжевой заливки; ColorFib30 по умолч. синий.
   • 12 именованных паттернов с точными %:
       01 ПД тип1, 02 ПД тип2, 03–06 расширения, 07–12 каскады.
   • Dual TF: UseVirtualTF, FastTF=M1, SlowTF=M15.
@@ -60,19 +63,21 @@
 ================================================================================
 2) Визуализация
 ================================================================================
-  Зоны CZ, сессии, liquidity, прицел, ЗУ/ПД/каскад/РМ, 12 паттернов с %,
-  канал границ, Balance RSI label, Probability HUD, стрелки A/B/C.
+  Зоны CZ, сессии, liquidity, прицел (RGB-чёрточки), ЗУ/ПД/каскад/РМ,
+  линия «30» (тонкая, без заливки), 12 паттернов с %, канал границ,
+  Balance RSI label, Probability HUD, стрелки A/B/C.
 
 ================================================================================
 3) Ключевые входные параметры (сверх ядра v1)
 ================================================================================
   SpeedPreset, IndicatorSpeed, UseVirtualTF, FastTF, SlowTF,
   ShowAll12Patterns, ShowDecisionZones, ShowPullbackZones, ShowCascadeMarks,
-  ShowReversalMoments, PD_MinCorrectionPct, PD_BreakoutPct, ZU_SizePctOfMove,
-  CascadeMaxBreakoutPct, CascadeRetrace50/70Pct, CascadeDeep150Pct,
+  ShowReversalMoments, ShowFib30, ColorFib30, PD_MinCorrectionPct, PD_BreakoutPct,
+  ZU_SizePctOfMove, CascadeMaxBreakoutPct, CascadeRetrace50/70Pct, CascadeDeep150Pct,
   ShowBalanceRSI, BalanceRSI_Period, FilterByBalanceRSI,
   ShowBoundariesChannel, Alert_RM…Alert_MTF, AlertCooldownSec,
-  DynamicProbability, SightRecalcOnBarCloseOnly, SignalsOnlyOnBarClose.
+  DynamicProbability, SightRecalcOnBarCloseOnly, SightATR_Height, SightLevelsLive,
+  SignalsOnlyOnBarClose.
 
 ================================================================================
 4) Критерии приёмки (v4.1)
@@ -84,6 +89,8 @@
   4.13 Balance RSI и канал границ отображаются при включении.
   4.14 10 типов алертов переключаются индивидуально.
   4.15 Пресеты существуют для 4 пар × 3 скорости.
+  4.16 Линия «30»: якоря импульса ПД/ЗУ (не day range), без оранжевой заливки.
+  4.17 Высота прицела = SightATR_Height×ATR; ширина по барам — из Inputs.
 
 ================================================================================
 5) Не входит (осознанно вне scope)
@@ -99,7 +106,7 @@
   • README.md, README_INSTALL_RU.txt
   • UserGuide / шпаргалка трейдера (txt)
   • Acteck_v4.1_Manual_RU.pdf
-  • docs/SNIPER_PARITY_V4_RU.md, CHANGES_V4.1.md
+  • docs/SNIPER_PARITY_V4_RU.md, docs/SNIPER_VISUAL_PARITY_RU.md, CHANGES_V4.1.md
 
 ================================================================================
 7) Прочее

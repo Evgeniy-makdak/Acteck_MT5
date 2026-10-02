@@ -7,6 +7,10 @@ Acteck v 4.1 — установка
 4) OK → при SyncChartFromPreset=true график сам станет
      на нужную пару и M5/H1 из пресета
 5) Обучение: TradeEnabled=false
-6) Структуры ЗУ/ПД/… по умолчанию ВЫКЛ — см. UserGuide п.3b
+6) Структуры ЗУ/ПД/… — см. UserGuide п.3b (вкл. ShowDecisionZones и т.д.)
+7) Линия «30»: ShowFib30 — от импульса ПД/ЗУ, не от дня (п.3b-1)
+8) Прицел: высота от ATR, ширина по барам — п.3b-2
 
 Шпаргалка: UserGuide_Snayper_Pricel_EA_RU.txt
+Визуал/Fib: docs/SNIPER_VISUAL_PARITY_RU.md
+Changelog: CHANGES_V4.1.md

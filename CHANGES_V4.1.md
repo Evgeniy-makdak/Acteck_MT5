@@ -19,3 +19,21 @@ PAIR = EURUSD | GBPUSD | USDJPY | USDCHF
 ```
 
 `SymbolStrategyProfile=AUTO` — профиль по символу графика.
+
+---
+
+## 2026-10-02 — Fib «30» и прицел (визуал Sniper-PRO)
+
+### Линия «30»
+- **Откуда:** якоря импульса последней ПД/ЗУ (`imp_start` / `imp_end`), не day high/low.
+- **Формула:** `0% = конец импульса`, `100% = начало`; линия = `конец + ZU_SizePctOfMove% × (начало − конец)`.
+- **Вид:** только тонкая линия + подпись `30` (`ColorFib30=clrDodgerBlue`). Оранжевая заливка `FIB30_BAND` **убрана**.
+- Inputs: `ShowFib30`, `ColorFib30`, `ZU_SizePctOfMove`.
+
+### Прицел
+- Высота границ: `SightATR_Height × ATR` (расширяется/сужается с волатильностью).
+- По времени: `SightBarsWidth` / `SightDashBars` — фиксированы в Inputs.
+- Live-дыхание: `SightLevelsLive` (лёгкий сдвиг полосы к цене).
+- По умолчанию: RGB-чёрточки без рамки (`SightShowFrame=false`).
+
+Документы обновлены: `README.md`, `UserGuide_…`, `TZ_…`, `docs/SNIPER_VISUAL_PARITY_RU.md`, `docs/ALGORITHM_BEGINNER_RU.md`.

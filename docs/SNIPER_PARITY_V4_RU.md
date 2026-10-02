@@ -21,6 +21,7 @@
 | Канал «границы» | `ShowBoundariesChannel` | OK |
 | 10 типов алертов | `Alert_*` × 10 | OK |
 | ЗУ размер ~30% движения | `ZU_SizePctOfMove=30` | OK |
+| Линия Fib «30» на графике | `ShowFib30`: 0%=конец импульса ПД/ЗУ, без заливки | OK (2026-10-02) |
 | ПД ≥123% выхода из диапазона | `PD_BreakoutPct=123` | OK |
 | Каскад отмена >100% X | `CascadeMaxBreakoutPct` | OK |
 

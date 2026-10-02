@@ -249,8 +249,8 @@ input bool                 ShowPullbackZones    = true;   // ПД
 input bool                 ShowCascadeMarks     = false;
 input bool                 ShowReversalMoments  = false;  // РМ по умолч. выкл. (меньше шума)
 input bool                 ShowZoneFill         = false;  // заливка ЗУ/ПД ВЫКЛ — только контур
-input bool                 ShowFib30            = true;   // одна линия 30% (как на эталонном скрине)
-input color                ColorFib30           = clrDimGray;
+input bool                 ShowFib30            = true;   // тонкая линия «30» как в Sniper-PRO (без заливки)
+input color                ColorFib30           = clrDodgerBlue; // как синяя сетка на эталоне
 input ENUM_SPEED_PRESET    SpeedPreset          = SPEED_CALM; // скальп / спокойный / свинги — для ЛЮБОЙ пары
 input int                  IndicatorSpeed       = 8;      // глубина, если SpeedPreset=CUSTOM (2..60)
 input int                  StructureLookbackBars = 250;    // баров истории для структур
@@ -453,8 +453,10 @@ struct SStructureZone
    datetime t2;
    double   high;
    double   low;
-   double   range_x;    // ширина диапазона X
+   double   range_x;    // длина импульса / движения (для %)
    double   pct;        // точный % (коррекция / пробой / откат)
+   double   imp_start;  // начало импульса (Sniper Fib 100%)
+   double   imp_end;    // конец импульса / экстремум (Sniper Fib 0%)
    string   label;
    string   tf_tag;     // "" | "M1" | "M15"
    int      id;
@@ -3584,8 +3586,10 @@ void DrawStructureZone(const SStructureZone &z)
    ObjectSetInteger(0, base + "_OL", OBJPROP_ZORDER, 1);
    ObjectSetInteger(0, base + "_OL", OBJPROP_SELECTABLE, false);
 
-   // Фибо 30% — одна линия на самую свежую ПД/ЗУ (без дублей на каждой зоне)
-   if(ShowFib30 && z.range_x > PointValue() * 5.0 && (z.kind == SK_PD || z.kind == SK_ZU) && z.valid)
+   // --- Sniper-PRO: только линия «30» (без оранжевых областей) ---
+   // На эталоне: Fib 0% = конец импульса, 100% = начало; «30» — тонкая синяя черта.
+   // Уровень = imp_end + 0.3*(imp_start − imp_end). НЕ day high/low.
+   if(ShowFib30 && (z.kind == SK_PD || z.kind == SK_ZU) && z.valid)
    {
       int max_id = z.id;
       for(int j = 0; j < ArraySize(g_structZones); j++)
@@ -3596,23 +3600,37 @@ void DrawStructureZone(const SStructureZone &z)
       }
       if(z.id == max_id)
       {
-         double fib = (z.direction > 0)
-            ? (z.low + z.range_x * (PD_MinCorrectionPct / 100.0))
-            : (z.high - z.range_x * (PD_MinCorrectionPct / 100.0));
-         string fn = Prefix() + "FIB30";
-         string ft = Prefix() + "FIB30_T";
-         if(!ObjExists(fn))
-            ObjectCreate(0, fn, OBJ_TREND, 0, z.t1, fib, z.t2, fib);
-         ObjectMove(0, fn, 0, z.t1, fib);
-         ObjectMove(0, fn, 1, z.t2, fib);
-         ObjectSetInteger(0, fn, OBJPROP_COLOR, ColorFib30);
-         ObjectSetInteger(0, fn, OBJPROP_STYLE, STYLE_DASHDOT);
-         ObjectSetInteger(0, fn, OBJPROP_WIDTH, 1);
-         ObjectSetInteger(0, fn, OBJPROP_RAY_RIGHT, false);
-         ObjectSetInteger(0, fn, OBJPROP_BACK, true);
-         ObjectSetInteger(0, fn, OBJPROP_SELECTABLE, false);
-         DrawText(ft, z.t2, fib, "30%", ColorFib30, ANCHOR_LEFT_LOWER);
-         ObjectSetInteger(0, ft, OBJPROP_FONTSIZE, 7);
+         double a = z.imp_start;
+         double b = z.imp_end;
+         if(a != 0.0 && b != 0.0)
+         {
+            double move = MathAbs(a - b);
+            if(move > PointValue() * 5.0)
+            {
+               double fib = b + (a - b) * (ZU_SizePctOfMove / 100.0);
+               // старую заливку FIB30_BAND снести, если осталась
+               string zb = Prefix() + "FIB30_BAND";
+               if(ObjExists(zb))
+                  ObjectDelete(0, zb);
+
+               string fn = Prefix() + "FIB30";
+               string ft = Prefix() + "FIB30_T";
+               if(!ObjExists(fn))
+                  ObjectCreate(0, fn, OBJ_TREND, 0, z.t1, fib, z.t2, fib);
+               ObjectMove(0, fn, 0, z.t1, fib);
+               ObjectMove(0, fn, 1, z.t2, fib);
+               ObjectSetInteger(0, fn, OBJPROP_COLOR, ColorFib30);
+               ObjectSetInteger(0, fn, OBJPROP_STYLE, STYLE_SOLID);
+               ObjectSetInteger(0, fn, OBJPROP_WIDTH, 1);
+               ObjectSetInteger(0, fn, OBJPROP_RAY_RIGHT, false);
+               ObjectSetInteger(0, fn, OBJPROP_BACK, false);
+               ObjectSetInteger(0, fn, OBJPROP_SELECTABLE, false);
+               ObjectSetInteger(0, fn, OBJPROP_ZORDER, 50);
+               DrawText(ft, z.t2, fib, "30", ColorFib30, ANCHOR_LEFT_LOWER);
+               ObjectSetInteger(0, ft, OBJPROP_FONTSIZE, 8);
+               ObjectSetInteger(0, ft, OBJPROP_ZORDER, 51);
+            }
+         }
       }
    }
 
@@ -3632,7 +3650,8 @@ void PushStructureZoneEx(const int kind, const int pattern, const int direction,
                          const datetime t1, const datetime t2,
                          const double hi, const double lo,
                          const double range_x, const double pct,
-                         const string label, const bool valid, const string tf_tag)
+                         const string label, const bool valid, const string tf_tag,
+                         const double imp_start = 0.0, const double imp_end = 0.0)
 {
    int n = ArraySize(g_structZones);
    if(n >= MaxStructureZones)
@@ -3653,6 +3672,8 @@ void PushStructureZoneEx(const int kind, const int pattern, const int direction,
    g_structZones[n].low = lo;
    g_structZones[n].range_x = range_x;
    g_structZones[n].pct = pct;
+   g_structZones[n].imp_start = imp_start;
+   g_structZones[n].imp_end = imp_end;
    g_structZones[n].label = label;
    g_structZones[n].tf_tag = tf_tag;
    g_structZones[n].id = ++g_structSeq;
@@ -3796,6 +3817,7 @@ void DetectPattern_PD_T1(const MqlRates &rates[], const SPivot &swings[], const 
    int best_buy = -1, best_sell = -1;
    double best_buy_pct = 0, best_sell_pct = 0;
    double z_hi_b=0,z_lo_b=0,z_hi_s=0,z_lo_s=0,imp_b=0,imp_s=0;
+   double imp_start_b=0,imp_end_b=0,imp_start_s=0,imp_end_s=0;
    datetime t1_b=0,t2_b=0,t1_s=0,t2_s=0;
 
    for(int i = 2; i < n; i++)
@@ -3814,6 +3836,7 @@ void DetectPattern_PD_T1(const MqlRates &rates[], const SPivot &swings[], const 
       datetime t2a = now_t + (datetime)(sec * 30);
       datetime t2b = deadline + (datetime)(sec * 10);
       datetime t2 = (t2a < t2b ? t2a : t2b);
+      // зона входа — компактная у экстремума; «30» рисуется отдельно линией Fib
       double zh = MathMax(PointValue() * 8.0, (atr > 0 ? ZU_HeightATR_Mult * atr : impulse * 0.15));
 
       if(a.type == 1 && b.type == -1 && c.type == 1)
@@ -3821,7 +3844,9 @@ void DetectPattern_PD_T1(const MqlRates &rates[], const SPivot &swings[], const 
          if(corr_pct >= best_buy_pct)
          {
             best_buy = i; best_buy_pct = corr_pct; imp_b = impulse;
-            z_hi_b = b.p + zh; z_lo_b = b.p - zh * 0.25; t1_b = b.t; t2_b = t2;
+            z_hi_b = b.p + zh; z_lo_b = b.p - zh * 0.25;
+            imp_start_b = a.p; imp_end_b = b.p;
+            t1_b = b.t; t2_b = t2;
          }
       }
       else if(a.type == -1 && b.type == 1 && c.type == -1)
@@ -3829,17 +3854,21 @@ void DetectPattern_PD_T1(const MqlRates &rates[], const SPivot &swings[], const 
          if(corr_pct >= best_sell_pct)
          {
             best_sell = i; best_sell_pct = corr_pct; imp_s = impulse;
-            z_hi_s = b.p + zh * 0.25; z_lo_s = b.p - zh; t1_s = b.t; t2_s = t2;
+            z_hi_s = b.p + zh * 0.25; z_lo_s = b.p - zh;
+            imp_start_s = a.p; imp_end_s = b.p;
+            t1_s = b.t; t2_s = t2;
          }
       }
    }
 
    if(best_buy >= 0)
       PushStructureZoneEx(SK_PD, PAT_PD_T1, 1, t1_b, t2_b, z_hi_b, z_lo_b, imp_b, best_buy_pct,
-         StringFormat("%s BUY откат", PatternName(PAT_PD_T1)), true, tf_tag);
+         StringFormat("%s BUY откат", PatternName(PAT_PD_T1)), true, tf_tag,
+         imp_start_b, imp_end_b);
    if(best_sell >= 0)
       PushStructureZoneEx(SK_PD, PAT_PD_T1, -1, t1_s, t2_s, z_hi_s, z_lo_s, imp_s, best_sell_pct,
-         StringFormat("%s SELL откат", PatternName(PAT_PD_T1)), true, tf_tag);
+         StringFormat("%s SELL откат", PatternName(PAT_PD_T1)), true, tf_tag,
+         imp_start_s, imp_end_s);
 }
 
 // --- PAT 02: ПД тип 2 (синий уровень, ≤6ч, без диапазонов, только 1-е ПД) ---
@@ -3912,12 +3941,18 @@ void DetectPattern_PD_T2(const MqlRates &rates[], const SPivot &swings[], const 
       if(dir > 0) { z_hi = blue + zh; z_lo = blue - zh * 0.3; }
       else { z_hi = blue + zh * 0.3; z_lo = blue - zh; }
 
+      // Sniper Fib: 0% = экстремум пробоя (nxt), 100% = противоположная граница диапазона
+      double imp_start = (dir > 0) ? range_lo : range_hi;
+      double imp_end   = nxt.p;
+      double move_full = MathAbs(imp_end - imp_start);
+
       string lab = StringFormat("%s %s blue%s", PatternName(PAT_PD_T2), (dir>0?"BUY":"SELL"),
                                 tested ? " TEST" : " wait");
       datetime t2_pd = now_t + (datetime)(sec*20);
       if(deadline < t2_pd) t2_pd = deadline;
       PushStructureZoneEx(SK_PD, PAT_PD_T2, dir, pd_t, t2_pd,
-                          z_hi, z_lo, X, brk_pct, lab, true, tf_tag);
+                          z_hi, z_lo, move_full, brk_pct, lab, true, tf_tag,
+                          imp_start, imp_end);
       break; // только 1-е ПД
    }
 }
@@ -4043,20 +4078,22 @@ void DetectPattern_Expansions(const MqlRates &rates[], const SPivot &swings[], c
 
       int pat = ClassifyExpansion(rates, swings, i, range_end, range_hi, range_lo, X, t_last, dir);
 
-      // ЗУ = ZU_SizePctOfMove% от всего движения (по теории ~30%)
+      // Sniper-PRO: бокс ЗУ — компактный tip у экстремума; линия «30» рисуется отдельно от импульса.
       double move = X + beyond;
-      double zu_h = MathMax(PointValue() * 8.0, move * (ZU_SizePctOfMove / 100.0));
-      if(atr > 0) zu_h = MathMax(zu_h, ZU_HeightATR_Mult * atr);
+      double tip_h = MathMax(PointValue() * 8.0, (atr > 0 ? ZU_HeightATR_Mult * atr : move * 0.08));
+      double extremum = (dir > 0) ? (range_hi + beyond) : (range_lo - beyond);
+      double imp_start = (dir > 0) ? range_lo : range_hi;
       double z_hi, z_lo;
-      if(dir > 0) { z_hi = range_lo + zu_h; z_lo = range_lo - zu_h * 0.15; }
-      else { z_hi = range_hi + zu_h * 0.15; z_lo = range_hi - zu_h; }
+      if(dir > 0) { z_hi = extremum; z_lo = extremum - tip_h; }
+      else        { z_lo = extremum; z_hi = extremum + tip_h; }
 
       string lab = valid
          ? StringFormat("%s %s ЗУ", PatternName(pat), (dir>0?"BUY":"SELL"))
          : StringFormat("%s %s ОТМЕНА", PatternName(pat), (dir>0?"BUY":"SELL"));
       if(valid || ShowCascadeMarks || ShowAll12Patterns)
          PushStructureZoneEx(SK_ZU, pat, dir, t_last, now_t + (datetime)(sec * MathMax(20, SightBarsWidth)),
-                             z_hi, z_lo, X, beyond_pct, lab, valid, tf_tag);
+                             z_hi, z_lo, move, beyond_pct, lab, valid, tf_tag,
+                             imp_start, extremum);
    }
 }
 
