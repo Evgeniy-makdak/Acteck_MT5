@@ -85,6 +85,8 @@ enum ENUM_SPEED_PRESET
 //=========================
 input ENUM_SYMBOL_PROFILE  SymbolStrategyProfile = PROFILE_AUTO; // AUTO: match chart; CUSTOM: inputs below; else force named profile
 input ENUM_TIMEFRAMES      Timeframe            = PERIOD_M5;
+input bool                 SyncChartFromPreset  = true;  // OK в свойствах → сменить символ/ТФ графика под пресет
+input string               PreferredSymbol      = "";    // база символа из пресета: EURUSD / GBPUSD / … (суффикс брокера подберётся)
 input int                  DayStartHour         = 0;
 input bool                 UsePrevDayLevels     = true;
 input int                  ShowLevelsLenBars    = 500;
@@ -639,12 +641,121 @@ void LogEnvironment()
 //=========================
 string GetSymbolBaseName()
 {
-   string s = _Symbol;
+   return SymbolBaseOf(_Symbol);
+}
+
+string SymbolBaseOf(const string sym)
+{
+   string s = sym;
+   StringToUpper(s);
+   // типовые majоры — сначала длинные совпадения
+   string majors[] = {"EURUSD","GBPUSD","USDJPY","USDCHF","EURGBP","AUDUSD","USDCAD","NZDUSD","USDTRY","XAUUSD","XAGUSD"};
+   for(int i = 0; i < ArraySize(majors); i++)
+   {
+      if(StringFind(s, majors[i]) == 0)
+         return majors[i];
+   }
    int p = StringFind(s, ".");
    if(p > 0)
       return StringSubstr(s, 0, p);
    return s;
 }
+
+string PreferredSymbolBase()
+{
+   string pref = PreferredSymbol;
+   StringTrimLeft(pref);
+   StringTrimRight(pref);
+   if(StringLen(pref) > 0)
+      return SymbolBaseOf(pref);
+
+   // если PreferredSymbol пуст — из профиля пресета
+   if(SymbolStrategyProfile == PROFILE_EURUSD) return "EURUSD";
+   if(SymbolStrategyProfile == PROFILE_GBPUSD) return "GBPUSD";
+   if(SymbolStrategyProfile == PROFILE_USDJPY) return "USDJPY";
+   if(SymbolStrategyProfile == PROFILE_USDCHF) return "USDCHF";
+
+   // AUTO/CUSTOM без PreferredSymbol — не меняем инструмент
+   return "";
+}
+
+string FindBrokerSymbolByBase(const string base_in)
+{
+   string base = SymbolBaseOf(base_in);
+   if(StringLen(base) == 0)
+      return "";
+
+   // точное имя
+   if(SymbolInfoInteger(base, SYMBOL_EXIST))
+   {
+      SymbolSelect(base, true);
+      return base;
+   }
+
+   // текущий график уже тот же base
+   if(SymbolBaseOf(_Symbol) == base)
+      return _Symbol;
+
+   // поиск среди символов терминала (с суффиксами брокера: EURUSDrfd и т.п.)
+   int total = SymbolsTotal(false);
+   for(int i = 0; i < total; i++)
+   {
+      string name = SymbolName(i, false);
+      if(SymbolBaseOf(name) == base)
+      {
+         SymbolSelect(name, true);
+         return name;
+      }
+   }
+   return "";
+}
+
+// Подтянуть график под Timeframe + PreferredSymbol из пресета.
+// ChartSetSymbolPeriod асинхронен → EA переинициализируется; на втором заходе уже совпадает.
+bool TrySyncChartFromPreset()
+{
+   if(!SyncChartFromPreset)
+      return false;
+
+   ENUM_TIMEFRAMES want_tf = Timeframe;
+   if(want_tf == PERIOD_CURRENT)
+      want_tf = (ENUM_TIMEFRAMES)Period();
+
+   string want_base = PreferredSymbolBase();
+   string want_sym = _Symbol;
+   if(StringLen(want_base) > 0)
+   {
+      string found = FindBrokerSymbolByBase(want_base);
+      if(StringLen(found) == 0)
+      {
+         Log(StringFormat("SyncChart: символ базы %s не найден у брокера — ТФ сменим, инструмент оставим %s",
+                          want_base, _Symbol));
+      }
+      else
+         want_sym = found;
+   }
+
+   string cur_sym = ChartSymbol(0);
+   ENUM_TIMEFRAMES cur_tf = (ENUM_TIMEFRAMES)ChartPeriod(0);
+
+   bool same_sym = (SymbolBaseOf(cur_sym) == SymbolBaseOf(want_sym)) || (cur_sym == want_sym);
+   bool same_tf = (cur_tf == want_tf);
+   if(same_sym && same_tf)
+      return false; // уже ок
+
+   Log(StringFormat("SyncChart: %s %s → %s %s (из пресета)",
+                    cur_sym, EnumToString(cur_tf), want_sym, EnumToString(want_tf)));
+
+   ResetLastError();
+   if(!ChartSetSymbolPeriod(0, want_sym, want_tf))
+   {
+      Log(StringFormat("SyncChart FAILED err=%d", GetLastError()));
+      return false;
+   }
+   // Успех: терминал пересоздаст график/переинит EA — дальше тяжёлый OnInit не нужен
+   return true;
+}
+
 
 ENUM_SYMBOL_PROFILE DetectProfileFromSymbol()
 {
@@ -5354,6 +5465,10 @@ void ProcessIntrabar()
 //=========================
 int OnInit()
 {
+   // Пресет загружен → OK: подогнать символ и период графика под Inputs
+   if(TrySyncChartFromPreset())
+      return INIT_SUCCEEDED; // ждём переинит на новом символе/ТФ
+
    // reset
    g_zone.active = false;
    g_broken.active = false;

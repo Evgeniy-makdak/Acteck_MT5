@@ -1,5 +1,7 @@
 SymbolStrategyProfile=0
 Timeframe=16385
+PreferredSymbol=GBPUSD
+SyncChartFromPreset=true
 DayStartHour=0
 UsePrevDayLevels=true
 ShowLevelsLenBars=500
