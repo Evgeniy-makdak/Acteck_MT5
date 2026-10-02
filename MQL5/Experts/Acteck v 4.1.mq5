@@ -212,17 +212,17 @@ input color                ColorDemandZone      = clrPowderBlue;
 
 input group "=== Sniper: Sight (Прицел) ==="
 input bool                 ShowSight            = true;
-input bool                 RequireSightForEntry = false;  // if true, entries only inside sight
-input bool                 SightAsDashes        = true;   // как Sniper-PRO: короткие RGB-чёрточки (не прямоугольник)
-input double               SightATR_Height      = 1.2;    // sight vertical size in ATR
-input int                  SightBarsWidth       = 6;      // длина чёрточек (баров вправо); для box было 18
-input double               SightNearATR         = 1.5;    // attach sight near level within ATR
-input bool                 SightLevelsLive      = true;   // уровни чёрточек дышат с ценой/ATR внутри бара
-input color                ColorSightBuy        = clrDeepSkyBlue;
-input color                ColorSightSell       = clrOrangeRed;
-input color                ColorSightDashHi     = clrRed;       // край (Sniper)
-input color                ColorSightDashMid    = clrLimeGreen; // середина
-input color                ColorSightDashLo     = clrDodgerBlue;// край противоположный
+input bool                 RequireSightForEntry = false;
+input bool                 SightAsDashes        = false;  // false = рамка без заливки (рекомендуется)
+input double               SightATR_Height      = 1.2;
+input int                  SightBarsWidth       = 14;     // ширина рамки прицела (баров)
+input double               SightNearATR         = 1.5;
+input bool                 SightLevelsLive      = true;
+input color                ColorSightBuy        = clrDodgerBlue;  // голубой BUY
+input color                ColorSightSell       = clrMaroon;      // бордовый SELL
+input color                ColorSightDashHi     = clrRed;
+input color                ColorSightDashMid    = clrLimeGreen;
+input color                ColorSightDashLo     = clrDodgerBlue;
 
 input group "=== Sniper: Probability HUD ==="
 input bool                 ShowProbabilityHUD   = true;
@@ -242,11 +242,12 @@ input bool                 AlignBreakoutWithSight = true; // Signal A: не вх
 input bool                 MarkPreciseArrows    = true;   // крупные стрелки точного входа на закрытии бара
 
 input group "=== Sniper: Structures (ЗУ / ПД / Каскад / РМ) ==="
-input bool                 ShowDecisionZones    = true;   // ЗУ — зона решений (как в Sniper)
-input bool                 ShowPullbackZones    = true;   // ПД — зона отката
+input bool                 ShowDecisionZones    = true;   // ЗУ
+input bool                 ShowPullbackZones    = true;   // ПД
 input bool                 ShowCascadeMarks     = false;
-input bool                 ShowReversalMoments  = true;   // РМ
-input bool                 ShowFib30            = true;   // линия 30% отката по импульсу ПД/ЗУ
+input bool                 ShowReversalMoments  = false;  // РМ по умолч. выкл. (меньше шума)
+input bool                 ShowZoneFill         = false;  // заливка зон ВЫКЛ — только контур
+input bool                 ShowFib30            = false;  // одна линия 30% (выкл. по умолч. — без дублей)
 input color                ColorFib30           = clrDimGray;
 input ENUM_SPEED_PRESET    SpeedPreset          = SPEED_CALM; // скальп / спокойный / свинги — для ЛЮБОЙ пары
 input int                  IndicatorSpeed       = 8;      // глубина, если SpeedPreset=CUSTOM (2..60)
@@ -2890,7 +2891,8 @@ void NudgeSightLevelsLive()
    g_sightLow  = lo + shift;
 }
 
-// Без Delete+Create на каждом тике: двигаем существующие объекты (без мерцания)
+// Прицел: по умолчанию ПУСТАЯ рамка (толстый пунктир), без заливки.
+// BUY = голубой, SELL = бордовый. Опционально SightAsDashes = RGB-чёрточки.
 void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
 {
    if(!ShowSight || !g_sightActive)
@@ -2898,10 +2900,10 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
 
    int sec = PeriodSeconds(Timeframe);
    datetime t1 = rates[0].time;
-   datetime t2 = rates[0].time + (datetime)(sec * MathMax(3, SightBarsWidth));
+   datetime t2 = rates[0].time + (datetime)(sec * MathMax(4, SightBarsWidth));
    double mid = 0.5 * (g_sightHigh + g_sightLow);
    string label = (g_sightDirection > 0) ? "▶ ПРИЦЕЛ BUY" : "▶ ПРИЦЕЛ SELL";
-   color label_clr = (g_sightDirection > 0) ? ColorSightBuy : ColorSightSell;
+   color border = (g_sightDirection > 0) ? ColorSightBuy : ColorSightSell;
 
    if(SightAsDashes)
    {
@@ -2909,54 +2911,54 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
       const string d2 = Prefix() + "SIGHT_D2";
       const string d3 = Prefix() + "SIGHT_D3";
       const string txt = Prefix() + "SIGHT_TXT";
-
       if(force_recreate || g_sightDrawnDirection != g_sightDirection
          || !ObjExists(d1) || !ObjExists(d2) || !ObjExists(d3))
       {
          DeleteObjectsWithPrefix(Prefix() + "SIGHT_");
          g_sightDrawnDirection = g_sightDirection;
       }
-
-      // Три уровня: красный верх, зелёный середина, синий низ — короткие чёрточки
       SightDash(d1, t1, t2, g_sightHigh, ColorSightDashHi, 3);
       SightDash(d2, t1, t2, mid,         ColorSightDashMid, 3);
       SightDash(d3, t1, t2, g_sightLow,  ColorSightDashLo, 3);
-
-      DrawText(txt, t1, g_sightHigh + 8 * PointValue(), label, label_clr, ANCHOR_LEFT_LOWER);
+      DrawText(txt, t1, g_sightHigh + 8 * PointValue(), label, border, ANCHOR_LEFT_LOWER);
       ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 9);
       ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
       return;
    }
 
-   // Legacy: полупрозрачный прямоугольник
-   const string box = Prefix() + "SIGHT_BOX";
+   // Рамка без заливки
    const string tl  = Prefix() + "SIGHT_TL";
    const string txt = Prefix() + "SIGHT_TXT";
-   color fill = ToARGB(label_clr, 70);
-   if(force_recreate || !ObjExists(box) || !ObjExists(tl) || (g_sightDrawnDirection != g_sightDirection))
+   // Удалить старую заливку SIGHT_BOX если осталась от прошлых сборок
+   if(ObjExists(Prefix() + "SIGHT_BOX"))
+      ObjectDelete(0, Prefix() + "SIGHT_BOX");
+
+   if(force_recreate || !ObjExists(tl) || (g_sightDrawnDirection != g_sightDirection))
    {
       DeleteObjectsWithPrefix(Prefix() + "SIGHT_");
-      DrawRect(box, t1, g_sightHigh, t2, g_sightLow, fill, false, true);
-      ObjectSetInteger(0, box, OBJPROP_ZORDER, 100);
       ObjectCreate(0, tl, OBJ_RECTANGLE, 0, t1, g_sightHigh, t2, g_sightLow);
-      ObjectSetInteger(0, tl, OBJPROP_COLOR, label_clr);
-      ObjectSetInteger(0, tl, OBJPROP_STYLE, STYLE_SOLID);
-      ObjectSetInteger(0, tl, OBJPROP_WIDTH, 2);
-      ObjectSetInteger(0, tl, OBJPROP_FILL, false);
+      ObjectSetInteger(0, tl, OBJPROP_COLOR, border);
+      ObjectSetInteger(0, tl, OBJPROP_STYLE, STYLE_DASH);
+      ObjectSetInteger(0, tl, OBJPROP_WIDTH, 3);          // толстый пунктир
+      ObjectSetInteger(0, tl, OBJPROP_FILL, false);       // БЕЗ фона
       ObjectSetInteger(0, tl, OBJPROP_BACK, false);
       ObjectSetInteger(0, tl, OBJPROP_ZORDER, 101);
       ObjectSetInteger(0, tl, OBJPROP_SELECTABLE, false);
-      DrawText(txt, t1, g_sightHigh + 8 * PointValue(), label, label_clr, ANCHOR_LEFT_LOWER);
+      DrawText(txt, t1, g_sightHigh + 10 * PointValue(), label, border, ANCHOR_LEFT_LOWER);
       ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 10);
+      ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
       g_sightDrawnDirection = g_sightDirection;
       return;
    }
-   ObjectMove(0, box, 0, t1, g_sightHigh);
-   ObjectMove(0, box, 1, t2, g_sightLow);
    ObjectMove(0, tl, 0, t1, g_sightHigh);
    ObjectMove(0, tl, 1, t2, g_sightLow);
-   ObjectMove(0, txt, 0, t1, g_sightHigh + 8 * PointValue());
+   ObjectSetInteger(0, tl, OBJPROP_COLOR, border);
+   ObjectSetInteger(0, tl, OBJPROP_STYLE, STYLE_DASH);
+   ObjectSetInteger(0, tl, OBJPROP_WIDTH, 3);
+   ObjectSetInteger(0, tl, OBJPROP_FILL, false);
+   ObjectMove(0, txt, 0, t1, g_sightHigh + 10 * PointValue());
    ObjectSetString(0, txt, OBJPROP_TEXT, label);
+   ObjectSetInteger(0, txt, OBJPROP_COLOR, border);
 }
 
 // Внутри бара: сторона sticky; уровни чёрточек могут дышать с ценой
@@ -3286,42 +3288,26 @@ void UpdateProbabilityHUD(const int display_value)
    if(display_value >= 60) c = ColorProbHigh;
    else if(display_value < ProbMinToTrade) c = ColorProbLow;
 
-   // Sniper-PRO: число справа, мини-бары (ломаная история) слева от числа. Без текста на цифре.
-   const int pad_num = 16;
-   HudLabel(Prefix() + "PROB_TITLE", pad_num, 50, "Вероятность = % объёма", clrDimGray, 8);
-   HudLabel(Prefix() + "PROB_NUM",   pad_num, 72, IntegerToString(display_value), c, 30, "Arial Bold");
+   // Число крупно; подпись ВЫШЕ сервисной строки не лезем — коротко и ниже числа
+   const int pad = 14;
+   HudLabel(Prefix() + "PROB_NUM",   pad, 58, IntegerToString(display_value), c, 28, "Arial Bold");
+   HudLabel(Prefix() + "PROB_TITLE", pad, 100, "% объёма", clrGray, 8);
 
    int n = ArraySize(g_probHistory);
-   int from = MathMax(0, n - 12);
+   int from = MathMax(0, n - 10);
    int bars = n - from;
-   if(bars < 1)
+   if(bars < 2)
       return;
 
-   const int bar_w = 4;
-   const int gap = 2;
-   const int max_h = 30;
-   const int base_y = 102;
-   // Больший XDISTANCE = левее от правого края → бары слева от числа
-   const int x_right = pad_num + 52;
-   for(int i = 0; i < bars; i++)
+   string spark = "";
+   for(int i = from; i < n; i++)
    {
-      int v = g_probHistory[from + i];
-      int h = (int)MathMax(3, MathRound(max_h * (MathMax(5, MathMin(95, v)) / 95.0)));
-      int x = x_right + (bars - 1 - i) * (bar_w + gap);
-      string bn = Prefix() + "PROB_BAR" + IntegerToString(i);
-      ObjectCreate(0, bn, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, bn, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
-      ObjectSetInteger(0, bn, OBJPROP_XDISTANCE, x);
-      ObjectSetInteger(0, bn, OBJPROP_YDISTANCE, base_y - h);
-      ObjectSetInteger(0, bn, OBJPROP_XSIZE, bar_w);
-      ObjectSetInteger(0, bn, OBJPROP_YSIZE, h);
-      ObjectSetInteger(0, bn, OBJPROP_BGCOLOR, c);
-      ObjectSetInteger(0, bn, OBJPROP_COLOR, c);
-      ObjectSetInteger(0, bn, OBJPROP_BORDER_TYPE, BORDER_FLAT);
-      ObjectSetInteger(0, bn, OBJPROP_BACK, false);
-      ObjectSetInteger(0, bn, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, bn, OBJPROP_ZORDER, 199);
+      int v = g_probHistory[i];
+      if(v >= 70) spark += "/";
+      else if(v >= 45) spark += "-";
+      else spark += "\\";
    }
+   HudLabel(Prefix() + "PROB_SPARK", pad + 48, 68, spark, c, 11, "Courier New");
 }
 
 // Контекстная вероятность (без сигнала A/B/C): насколько «созрела» зона для входа объёмом.
@@ -3500,6 +3486,7 @@ void ClearStructureObjects()
    DeleteObjectsWithPrefix(Prefix() + "PAT_");
    DeleteObjectsWithPrefix(Prefix() + "BND_");
    DeleteObjectsWithPrefix(Prefix() + "RSI_");
+   DeleteObjectsWithPrefix(Prefix() + "FIB30");
 }
 
 void DrawStructureZone(const SStructureZone &z)
@@ -3531,10 +3518,15 @@ void DrawStructureZone(const SStructureZone &z)
    if(!z.valid)
       fill_c = clrDarkGray;
 
-   // Зона торговли/решения — полупрозрачный бокс (как в Sniper)
-   color fill = ToARGB(fill_c, (z.kind == SK_RM) ? 25 : (z.valid ? 28 : 18));
-   DrawRect(base + "_BOX", z.t1, z.high, z.t2, z.low, fill, true, true);
-   ObjectSetInteger(0, base + "_BOX", OBJPROP_ZORDER, 1);
+   // Зона: по умолчанию ТОЛЬКО контур (без заливки) — иначе коричневое «пятно» перекрывает график
+   if(ShowZoneFill)
+   {
+      color fill = ToARGB(fill_c, (z.kind == SK_RM) ? 25 : (z.valid ? 28 : 18));
+      DrawRect(base + "_BOX", z.t1, z.high, z.t2, z.low, fill, true, true);
+      ObjectSetInteger(0, base + "_BOX", OBJPROP_ZORDER, 1);
+   }
+   else if(ObjExists(base + "_BOX"))
+      ObjectDelete(0, base + "_BOX");
 
    ObjectCreate(0, base + "_OL", OBJ_RECTANGLE, 0, z.t1, z.high, z.t2, z.low);
    ObjectSetInteger(0, base + "_OL", OBJPROP_COLOR, fill_c);
@@ -3545,25 +3537,36 @@ void DrawStructureZone(const SStructureZone &z)
    ObjectSetInteger(0, base + "_OL", OBJPROP_ZORDER, 1);
    ObjectSetInteger(0, base + "_OL", OBJPROP_SELECTABLE, false);
 
-   // Фибо 30% отката по импульсу (range_x) — только нужный уровень, без сетки 50/70/161
-   if(ShowFib30 && z.range_x > PointValue() * 5.0 && (z.kind == SK_PD || z.kind == SK_ZU))
+   // Фибо 30% — одна линия на самую свежую ПД/ЗУ (без дублей на каждой зоне)
+   if(ShowFib30 && z.range_x > PointValue() * 5.0 && (z.kind == SK_PD || z.kind == SK_ZU) && z.valid)
    {
-      double fib = (z.direction > 0)
-         ? (z.low + z.range_x * (PD_MinCorrectionPct / 100.0))
-         : (z.high - z.range_x * (PD_MinCorrectionPct / 100.0));
-      string fn = base + "_F30";
-      if(!ObjExists(fn))
-         ObjectCreate(0, fn, OBJ_TREND, 0, z.t1, fib, z.t2, fib);
-      ObjectMove(0, fn, 0, z.t1, fib);
-      ObjectMove(0, fn, 1, z.t2, fib);
-      ObjectSetInteger(0, fn, OBJPROP_COLOR, ColorFib30);
-      ObjectSetInteger(0, fn, OBJPROP_STYLE, STYLE_DASHDOT);
-      ObjectSetInteger(0, fn, OBJPROP_WIDTH, 1);
-      ObjectSetInteger(0, fn, OBJPROP_RAY_RIGHT, false);
-      ObjectSetInteger(0, fn, OBJPROP_BACK, true);
-      ObjectSetInteger(0, fn, OBJPROP_SELECTABLE, false);
-      DrawText(base + "_F30T", z.t2, fib, "30%", ColorFib30, ANCHOR_LEFT_LOWER);
-      ObjectSetInteger(0, base + "_F30T", OBJPROP_FONTSIZE, 7);
+      int max_id = z.id;
+      for(int j = 0; j < ArraySize(g_structZones); j++)
+      {
+         if(!g_structZones[j].active || !g_structZones[j].valid) continue;
+         if(g_structZones[j].kind != SK_PD && g_structZones[j].kind != SK_ZU) continue;
+         if(g_structZones[j].id > max_id) max_id = g_structZones[j].id;
+      }
+      if(z.id == max_id)
+      {
+         double fib = (z.direction > 0)
+            ? (z.low + z.range_x * (PD_MinCorrectionPct / 100.0))
+            : (z.high - z.range_x * (PD_MinCorrectionPct / 100.0));
+         string fn = Prefix() + "FIB30";
+         string ft = Prefix() + "FIB30_T";
+         if(!ObjExists(fn))
+            ObjectCreate(0, fn, OBJ_TREND, 0, z.t1, fib, z.t2, fib);
+         ObjectMove(0, fn, 0, z.t1, fib);
+         ObjectMove(0, fn, 1, z.t2, fib);
+         ObjectSetInteger(0, fn, OBJPROP_COLOR, ColorFib30);
+         ObjectSetInteger(0, fn, OBJPROP_STYLE, STYLE_DASHDOT);
+         ObjectSetInteger(0, fn, OBJPROP_WIDTH, 1);
+         ObjectSetInteger(0, fn, OBJPROP_RAY_RIGHT, false);
+         ObjectSetInteger(0, fn, OBJPROP_BACK, true);
+         ObjectSetInteger(0, fn, OBJPROP_SELECTABLE, false);
+         DrawText(ft, z.t2, fib, "30%", ColorFib30, ANCHOR_LEFT_LOWER);
+         ObjectSetInteger(0, ft, OBJPROP_FONTSIZE, 7);
+      }
    }
 
    if(ShowStructureLabels)
