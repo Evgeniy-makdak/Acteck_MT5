@@ -639,16 +639,11 @@ void LogEnvironment()
 //=========================
 // Symbol strategy profile (Portfolio v1.09)
 //=========================
-string GetSymbolBaseName()
-{
-   return SymbolBaseOf(_Symbol);
-}
-
 string SymbolBaseOf(const string sym)
 {
    string s = sym;
    StringToUpper(s);
-   // типовые majоры — сначала длинные совпадения
+   // типовые majors — сначала длинные совпадения
    string majors[] = {"EURUSD","GBPUSD","USDJPY","USDCHF","EURGBP","AUDUSD","USDCAD","NZDUSD","USDTRY","XAUUSD","XAGUSD"};
    for(int i = 0; i < ArraySize(majors); i++)
    {
@@ -659,6 +654,11 @@ string SymbolBaseOf(const string sym)
    if(p > 0)
       return StringSubstr(s, 0, p);
    return s;
+}
+
+string GetSymbolBaseName()
+{
+   return SymbolBaseOf(_Symbol);
 }
 
 string PreferredSymbolBase()
