@@ -202,7 +202,7 @@ input color                ColorLondon          = clrDodgerBlue;
 input color                ColorNY              = clrTomato;
 
 input group "=== Sniper: Liquidity zones ==="
-input bool                 ShowLiquidityZones   = false; // UI: выкл. по умолчанию
+input bool                 ShowLiquidityZones   = true;  // Спрос / Предложение (как на эталонном скрине)
 input int                  LiqPivotDepth        = 3;
 input double               LiqZoneATR_Mult      = 0.35;   // zone height = mult * ATR
 input int                  MaxLiquidityZones    = 3;
@@ -213,9 +213,11 @@ input color                ColorDemandZone      = clrPowderBlue;
 input group "=== Sniper: Sight (Прицел) ==="
 input bool                 ShowSight            = true;
 input bool                 RequireSightForEntry = false;
-input bool                 SightAsDashes        = false;  // false = рамка без заливки (рекомендуется)
+input bool                 SightShowFrame       = true;   // пустая пунктирная рамка (без заливки)
+input bool                 SightShowDashes      = true;   // RGB-чёрточки Hi/Mid/Lo внутри рамки
 input double               SightATR_Height      = 1.2;
 input int                  SightBarsWidth       = 14;     // ширина рамки прицела (баров)
+input int                  SightDashBars        = 5;      // длина RGB-чёрточек (баров)
 input double               SightNearATR         = 1.5;
 input bool                 SightLevelsLive      = true;
 input color                ColorSightBuy        = clrDodgerBlue;  // голубой BUY
@@ -246,8 +248,8 @@ input bool                 ShowDecisionZones    = true;   // ЗУ
 input bool                 ShowPullbackZones    = true;   // ПД
 input bool                 ShowCascadeMarks     = false;
 input bool                 ShowReversalMoments  = false;  // РМ по умолч. выкл. (меньше шума)
-input bool                 ShowZoneFill         = false;  // заливка зон ВЫКЛ — только контур
-input bool                 ShowFib30            = false;  // одна линия 30% (выкл. по умолч. — без дублей)
+input bool                 ShowZoneFill         = false;  // заливка ЗУ/ПД ВЫКЛ — только контур
+input bool                 ShowFib30            = true;   // одна линия 30% (как на эталонном скрине)
 input color                ColorFib30           = clrDimGray;
 input ENUM_SPEED_PRESET    SpeedPreset          = SPEED_CALM; // скальп / спокойный / свинги — для ЛЮБОЙ пары
 input int                  IndicatorSpeed       = 8;      // глубина, если SpeedPreset=CUSTOM (2..60)
@@ -2891,8 +2893,8 @@ void NudgeSightLevelsLive()
    g_sightLow  = lo + shift;
 }
 
-// Прицел: по умолчанию ПУСТАЯ рамка (толстый пунктир), без заливки.
-// BUY = голубой, SELL = бордовый. Опционально SightAsDashes = RGB-чёрточки.
+// Прицел (эталонный скрин): пустая пунктирная рамка + RGB-чёрточки + подпись.
+// BUY = голубая рамка, SELL = бордовая. Без заливки.
 void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
 {
    if(!ShowSight || !g_sightActive)
@@ -2901,64 +2903,67 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
    int sec = PeriodSeconds(Timeframe);
    datetime t1 = rates[0].time;
    datetime t2 = rates[0].time + (datetime)(sec * MathMax(4, SightBarsWidth));
+   // Короткие чёрточки у правого края рамки
+   datetime td2 = t2;
+   datetime td1 = t2 - (datetime)(sec * MathMax(3, SightDashBars));
    double mid = 0.5 * (g_sightHigh + g_sightLow);
    string label = (g_sightDirection > 0) ? "▶ ПРИЦЕЛ BUY" : "▶ ПРИЦЕЛ SELL";
    color border = (g_sightDirection > 0) ? ColorSightBuy : ColorSightSell;
 
-   if(SightAsDashes)
-   {
-      const string d1 = Prefix() + "SIGHT_D1";
-      const string d2 = Prefix() + "SIGHT_D2";
-      const string d3 = Prefix() + "SIGHT_D3";
-      const string txt = Prefix() + "SIGHT_TXT";
-      if(force_recreate || g_sightDrawnDirection != g_sightDirection
-         || !ObjExists(d1) || !ObjExists(d2) || !ObjExists(d3))
-      {
-         DeleteObjectsWithPrefix(Prefix() + "SIGHT_");
-         g_sightDrawnDirection = g_sightDirection;
-      }
-      SightDash(d1, t1, t2, g_sightHigh, ColorSightDashHi, 3);
-      SightDash(d2, t1, t2, mid,         ColorSightDashMid, 3);
-      SightDash(d3, t1, t2, g_sightLow,  ColorSightDashLo, 3);
-      DrawText(txt, t1, g_sightHigh + 8 * PointValue(), label, border, ANCHOR_LEFT_LOWER);
-      ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 9);
-      ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
-      return;
-   }
-
-   // Рамка без заливки
    const string tl  = Prefix() + "SIGHT_TL";
+   const string d1  = Prefix() + "SIGHT_D1";
+   const string d2  = Prefix() + "SIGHT_D2";
+   const string d3  = Prefix() + "SIGHT_D3";
    const string txt = Prefix() + "SIGHT_TXT";
-   // Удалить старую заливку SIGHT_BOX если осталась от прошлых сборок
+
    if(ObjExists(Prefix() + "SIGHT_BOX"))
       ObjectDelete(0, Prefix() + "SIGHT_BOX");
 
-   if(force_recreate || !ObjExists(tl) || (g_sightDrawnDirection != g_sightDirection))
+   const bool need_rebuild = force_recreate
+      || (g_sightDrawnDirection != g_sightDirection)
+      || (SightShowFrame && !ObjExists(tl))
+      || (SightShowDashes && (!ObjExists(d1) || !ObjExists(d2) || !ObjExists(d3)))
+      || !ObjExists(txt);
+
+   if(need_rebuild)
    {
       DeleteObjectsWithPrefix(Prefix() + "SIGHT_");
-      ObjectCreate(0, tl, OBJ_RECTANGLE, 0, t1, g_sightHigh, t2, g_sightLow);
+      g_sightDrawnDirection = g_sightDirection;
+   }
+
+   if(SightShowFrame)
+   {
+      if(!ObjExists(tl))
+         ObjectCreate(0, tl, OBJ_RECTANGLE, 0, t1, g_sightHigh, t2, g_sightLow);
+      ObjectMove(0, tl, 0, t1, g_sightHigh);
+      ObjectMove(0, tl, 1, t2, g_sightLow);
       ObjectSetInteger(0, tl, OBJPROP_COLOR, border);
       ObjectSetInteger(0, tl, OBJPROP_STYLE, STYLE_DASH);
-      ObjectSetInteger(0, tl, OBJPROP_WIDTH, 3);          // толстый пунктир
-      ObjectSetInteger(0, tl, OBJPROP_FILL, false);       // БЕЗ фона
+      ObjectSetInteger(0, tl, OBJPROP_WIDTH, 3);
+      ObjectSetInteger(0, tl, OBJPROP_FILL, false);
       ObjectSetInteger(0, tl, OBJPROP_BACK, false);
       ObjectSetInteger(0, tl, OBJPROP_ZORDER, 101);
       ObjectSetInteger(0, tl, OBJPROP_SELECTABLE, false);
-      DrawText(txt, t1, g_sightHigh + 10 * PointValue(), label, border, ANCHOR_LEFT_LOWER);
-      ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 10);
-      ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
-      g_sightDrawnDirection = g_sightDirection;
-      return;
    }
-   ObjectMove(0, tl, 0, t1, g_sightHigh);
-   ObjectMove(0, tl, 1, t2, g_sightLow);
-   ObjectSetInteger(0, tl, OBJPROP_COLOR, border);
-   ObjectSetInteger(0, tl, OBJPROP_STYLE, STYLE_DASH);
-   ObjectSetInteger(0, tl, OBJPROP_WIDTH, 3);
-   ObjectSetInteger(0, tl, OBJPROP_FILL, false);
-   ObjectMove(0, txt, 0, t1, g_sightHigh + 10 * PointValue());
-   ObjectSetString(0, txt, OBJPROP_TEXT, label);
-   ObjectSetInteger(0, txt, OBJPROP_COLOR, border);
+   else if(ObjExists(tl))
+      ObjectDelete(0, tl);
+
+   if(SightShowDashes)
+   {
+      SightDash(d1, td1, td2, g_sightHigh, ColorSightDashHi, 3);
+      SightDash(d2, td1, td2, mid,         ColorSightDashMid, 3);
+      SightDash(d3, td1, td2, g_sightLow,  ColorSightDashLo, 3);
+   }
+   else
+   {
+      if(ObjExists(d1)) ObjectDelete(0, d1);
+      if(ObjExists(d2)) ObjectDelete(0, d2);
+      if(ObjExists(d3)) ObjectDelete(0, d3);
+   }
+
+   DrawText(txt, t1, g_sightHigh + 10 * PointValue(), label, border, ANCHOR_LEFT_LOWER);
+   ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 10);
+   ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
 }
 
 // Внутри бара: сторона sticky; уровни чёрточек могут дышать с ценой
@@ -3295,18 +3300,16 @@ void UpdateProbabilityHUD(const int display_value)
    if(display_value >= 60) c = ColorProbHigh;
    else if(display_value < ProbMinToTrade) c = ColorProbLow;
 
-   // Вертикальный стек: число (верх) → зазор → «% объёма» → ломаная.
-   // YDISTANCE + ANCHOR_RIGHT_UPPER: на Retina/Wine шрифт 28 занимает ~40–48 px по высоте.
-   const int pad = 14;
-   const int num_size = 28;
-   const int y_num = 52;
-   const int gap_after_num = 48;   // запас под Bold 28 (не 42 — иначе снова налезает)
-   const int y_pct = y_num + gap_after_num;
-   const int y_spark = y_pct + 16;
+   // ВАЖНО (Mac/Wine Retina): НЕ ставить текст ПОД крупным Bold —
+   // высота глифа ~2× fontsize, вертикальный стек всегда наползает.
+   // Решение: число = «69%», подпись и ломаная СЛЕВА от числа (больший XDISTANCE).
+   const int pad_num = 12;
+   const int pad_left = 78;   // левее числа
+   const int y_row = 48;
 
-   HudLabel(Prefix() + "PROB_NUM", pad, y_num,
-            IntegerToString(display_value), c, num_size, "Arial Bold");
-   HudLabel(Prefix() + "PROB_PCT", pad, y_pct, "% объёма", clrGray, 8);
+   HudLabel(Prefix() + "PROB_NUM", pad_num, y_row,
+            IntegerToString(display_value) + "%", c, 26, "Arial Bold");
+   HudLabel(Prefix() + "PROB_PCT", pad_left, y_row + 8, "объём", clrGray, 8);
 
    int n = ArraySize(g_probHistory);
    int from = MathMax(0, n - 10);
@@ -3321,8 +3324,7 @@ void UpdateProbabilityHUD(const int display_value)
       else if(v >= 45) spark += "-";
       else spark += "\\";
    }
-   // Ломаная под подписью, не на цифре
-   HudLabel(Prefix() + "PROB_SPARK", pad + 8, y_spark, spark, c, 10, "Courier New");
+   HudLabel(Prefix() + "PROB_SPARK", pad_left, y_row + 24, spark, c, 10, "Courier New");
 }
 
 // Контекстная вероятность (без сигнала A/B/C): насколько «созрела» зона для входа объёмом.
