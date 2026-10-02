@@ -2601,11 +2601,21 @@ void RebuildSessions(const datetime now_time)
    }
 }
 
+string SessionObjKey(const string name, const datetime t_start)
+{
+   // Стабильное имя (не индекс массива) — иначе при пересборке объекты «прыгают».
+   string s = name;
+   StringReplace(s, " ", "");
+   return Prefix() + "SES_" + s + "_" + TimeToObjectId(t_start) + "_";
+}
+
 void DrawSessionLevels()
 {
-   DeleteObjectsWithPrefix(Prefix() + "SES_");
    if(!ShowSessionLevels)
+   {
+      DeleteObjectsWithPrefix(Prefix() + "SES_");
       return;
+   }
 
    // Drop exact duplicates (same name + start) created by lookback overlap
    for(int i = ArraySize(g_sessions) - 1; i >= 0; i--)
@@ -2614,10 +2624,8 @@ void DrawSessionLevels()
       {
          if(g_sessions[i].name == g_sessions[j].name && g_sessions[i].t_start == g_sessions[j].t_start)
          {
-            // keep the one with later end (more complete)
             if(g_sessions[i].t_end >= g_sessions[j].t_end)
                g_sessions[j] = g_sessions[i];
-            // remove i by swapping with last
             int last = ArraySize(g_sessions) - 1;
             if(i != last)
                g_sessions[i] = g_sessions[last];
@@ -2637,36 +2645,70 @@ void DrawSessionLevels()
    datetime day_key = StringToTime(StringFormat("%04d.%02d.%02d", dt.year, dt.mon, dt.day));
    bool session_alert_today = (g_lastSessionAlertDay == day_key);
 
+   // Без Delete-all: ObjectMove/upsert. Потом убираем только «сироты».
+   string keep[];
+   ArrayResize(keep, 0);
+
    for(int i = 0; i < n; i++)
    {
       if(!g_sessions[i].valid) continue;
-      string base = Prefix() + "SES_" + IntegerToString(i) + "_";
+      string base = SessionObjKey(g_sessions[i].name, g_sessions[i].t_start);
 
-      // High marker + dashed projection
-      DrawHLineSegment(base + "H", g_sessions[i].t_high, ray_right, g_sessions[i].high,
+      string nH  = base + "H";
+      string nHT = base + "HT";
+      string nHL = base + "HL";
+      string nL  = base + "L";
+      string nLT = base + "LT";
+      string nLL = base + "LL";
+      string nSH = base + "SH";
+
+      int k = ArraySize(keep);
+      ArrayResize(keep, k + 6);
+      keep[k] = nH; keep[k+1] = nHT; keep[k+2] = nHL;
+      keep[k+3] = nL; keep[k+4] = nLT; keep[k+5] = nLL;
+
+      DrawHLineSegment(nH, g_sessions[i].t_high, ray_right, g_sessions[i].high,
                        g_sessions[i].clr, STYLE_DOT, 1, "");
-      // short thick tick at extremum
       datetime tick2 = g_sessions[i].t_high + (datetime)sec;
-      DrawHLineSegment(base + "HT", g_sessions[i].t_high, tick2, g_sessions[i].high,
+      DrawHLineSegment(nHT, g_sessions[i].t_high, tick2, g_sessions[i].high,
                        g_sessions[i].clr, STYLE_SOLID, 3, "");
-      DrawText(base + "HL", g_sessions[i].t_high, g_sessions[i].high + 4 * PointValue(),
+      DrawText(nHL, g_sessions[i].t_high, g_sessions[i].high + 4 * PointValue(),
                g_sessions[i].name, g_sessions[i].clr, ANCHOR_LEFT_LOWER);
 
-      // Low marker + dashed projection
-      DrawHLineSegment(base + "L", g_sessions[i].t_low, ray_right, g_sessions[i].low,
+      DrawHLineSegment(nL, g_sessions[i].t_low, ray_right, g_sessions[i].low,
                        g_sessions[i].clr, STYLE_DOT, 1, "");
       datetime tick2l = g_sessions[i].t_low + (datetime)sec;
-      DrawHLineSegment(base + "LT", g_sessions[i].t_low, tick2l, g_sessions[i].low,
+      DrawHLineSegment(nLT, g_sessions[i].t_low, tick2l, g_sessions[i].low,
                        g_sessions[i].clr, STYLE_SOLID, 3, "");
-      DrawText(base + "LL", g_sessions[i].t_low, g_sessions[i].low - 4 * PointValue(),
+      DrawText(nLL, g_sessions[i].t_low, g_sessions[i].low - 4 * PointValue(),
                g_sessions[i].name, g_sessions[i].clr, ANCHOR_LEFT_UPPER);
 
       if(ShowSessionShading)
       {
          color fill = ToARGB(g_sessions[i].clr, 18);
-         DrawRect(base + "SH", g_sessions[i].t_start, g_sessions[i].high,
+         DrawRect(nSH, g_sessions[i].t_start, g_sessions[i].high,
                   g_sessions[i].t_end, g_sessions[i].low, fill, true, true);
+         int kk = ArraySize(keep);
+         ArrayResize(keep, kk + 1);
+         keep[kk] = nSH;
       }
+   }
+
+   // Удалить только SES_* которых больше нет в keep
+   const string pfx = Prefix() + "SES_";
+   int total = ObjectsTotal(0, 0, -1);
+   for(int oi = total - 1; oi >= 0; oi--)
+   {
+      string on = ObjectName(0, oi, 0, -1);
+      if(StringFind(on, pfx) != 0)
+         continue;
+      bool found = false;
+      for(int ki = 0; ki < ArraySize(keep); ki++)
+      {
+         if(keep[ki] == on) { found = true; break; }
+      }
+      if(!found)
+         ObjectDelete(0, on);
    }
 
    if(!session_alert_today && n > 0)
@@ -3292,19 +3334,25 @@ void HudLabel(const string name, const int x, const int y,
 
 void UpdateProbabilityHUD(const int display_value)
 {
-   DeleteObjectsWithPrefix(Prefix() + "PROB_");
    if(!ShowProbabilityHUD)
+   {
+      DeleteObjectsWithPrefix(Prefix() + "PROB_");
       return;
+   }
+
+   // Убрать артефакты старых версий (бары), не трогая текущие лейблы
+   if(ObjExists(Prefix() + "PROB_BAR0"))
+      DeleteObjectsWithPrefix(Prefix() + "PROB_BAR");
+   if(ObjExists(Prefix() + "PROB_TITLE"))
+      ObjectDelete(0, Prefix() + "PROB_TITLE");
 
    color c = ColorProbMid;
    if(display_value >= 60) c = ColorProbHigh;
    else if(display_value < ProbMinToTrade) c = ColorProbLow;
 
-   // ВАЖНО (Mac/Wine Retina): НЕ ставить текст ПОД крупным Bold —
-   // высота глифа ~2× fontsize, вертикальный стек всегда наползает.
-   // Решение: число = «69%», подпись и ломаная СЛЕВА от числа (больший XDISTANCE).
+   // Без Delete+Create: HudLabel делает upsert → нет мигания числа.
    const int pad_num = 12;
-   const int pad_left = 78;   // левее числа
+   const int pad_left = 78;
    const int y_row = 48;
 
    HudLabel(Prefix() + "PROB_NUM", pad_num, y_row,
@@ -3314,7 +3362,11 @@ void UpdateProbabilityHUD(const int display_value)
    int n = ArraySize(g_probHistory);
    int from = MathMax(0, n - 10);
    if(n - from < 2)
+   {
+      if(ObjExists(Prefix() + "PROB_SPARK"))
+         ObjectDelete(0, Prefix() + "PROB_SPARK");
       return;
+   }
 
    string spark = "";
    for(int i = from; i < n; i++)
@@ -4423,7 +4475,8 @@ void RefreshSniperContext(const MqlRates &rates[])
    ApplyProbabilityHUD(true);
 }
 
-// Внутри бара: % динамический; сторона прицела зафиксирована
+// Внутри бара: % динамический; сторона прицела зафиксирована.
+// Сессии/ликвидность/структуры — ТОЛЬКО на закрытии бара (иначе мигание надписей).
 void RefreshContextLive()
 {
    if(!DynamicProbability)
@@ -4442,13 +4495,10 @@ void RefreshContextLive()
    if(copied < (CZ_LookbackN + 10))
       return;
 
-   RebuildSessions(rates[0].time);
-   DrawSessionLevels();
-
    if(SightRecalcOnBarCloseOnly)
       MaintainSightIntrabar(rates);
    else
-      UpdateSight(rates); // только если явно разрешили мигание
+      UpdateSight(rates);
 
    ApplyProbabilityHUD(false);
 }
