@@ -213,8 +213,8 @@ input color                ColorDemandZone      = clrPowderBlue;
 input group "=== Sniper: Sight (Прицел) ==="
 input bool                 ShowSight            = true;
 input bool                 RequireSightForEntry = false;
-input bool                 SightShowFrame       = true;   // пустая пунктирная рамка (без заливки)
-input bool                 SightShowDashes      = true;   // RGB-чёрточки Hi/Mid/Lo внутри рамки
+input bool                 SightShowFrame       = false;  // рамка ВЫКЛ по умолчанию — только чёрточки
+input bool                 SightShowDashes      = true;   // RGB-чёрточки Hi/Mid/Lo (по умолчанию)
 input double               SightATR_Height      = 1.2;
 input int                  SightBarsWidth       = 14;     // ширина рамки прицела (баров)
 input int                  SightDashBars        = 5;      // длина RGB-чёрточек (баров)
@@ -3340,43 +3340,21 @@ void UpdateProbabilityHUD(const int display_value)
       return;
    }
 
-   // Убрать артефакты старых версий (бары), не трогая текущие лейблы
+   // Снести любые старые подписи/бары — они и наползали на число
+   if(ObjExists(Prefix() + "PROB_PCT"))    ObjectDelete(0, Prefix() + "PROB_PCT");
+   if(ObjExists(Prefix() + "PROB_TITLE"))  ObjectDelete(0, Prefix() + "PROB_TITLE");
+   if(ObjExists(Prefix() + "PROB_SPARK"))  ObjectDelete(0, Prefix() + "PROB_SPARK");
    if(ObjExists(Prefix() + "PROB_BAR0"))
       DeleteObjectsWithPrefix(Prefix() + "PROB_BAR");
-   if(ObjExists(Prefix() + "PROB_TITLE"))
-      ObjectDelete(0, Prefix() + "PROB_TITLE");
+   if(ObjExists(Prefix() + "PROB_CTX"))    ObjectDelete(0, Prefix() + "PROB_CTX");
 
    color c = ColorProbMid;
    if(display_value >= 60) c = ColorProbHigh;
    else if(display_value < ProbMinToTrade) c = ColorProbLow;
 
-   // Без Delete+Create: HudLabel делает upsert → нет мигания числа.
-   const int pad_num = 12;
-   const int pad_left = 78;
-   const int y_row = 48;
-
-   HudLabel(Prefix() + "PROB_NUM", pad_num, y_row,
-            IntegerToString(display_value) + "%", c, 26, "Arial Bold");
-   HudLabel(Prefix() + "PROB_PCT", pad_left, y_row + 8, "объём", clrGray, 8);
-
-   int n = ArraySize(g_probHistory);
-   int from = MathMax(0, n - 10);
-   if(n - from < 2)
-   {
-      if(ObjExists(Prefix() + "PROB_SPARK"))
-         ObjectDelete(0, Prefix() + "PROB_SPARK");
-      return;
-   }
-
-   string spark = "";
-   for(int i = from; i < n; i++)
-   {
-      int v = g_probHistory[i];
-      if(v >= 70) spark += "/";
-      else if(v >= 45) spark += "-";
-      else spark += "\\";
-   }
-   HudLabel(Prefix() + "PROB_SPARK", pad_left, y_row + 24, spark, c, 10, "Courier New");
+   // ОДНА подпись: «69%». Никакого второго текста рядом/снизу — на Wine/Retina он всегда наползает.
+   HudLabel(Prefix() + "PROB_NUM", 14, 44,
+            IntegerToString(display_value) + "%", c, 24, "Arial Bold");
 }
 
 // Контекстная вероятность (без сигнала A/B/C): насколько «созрела» зона для входа объёмом.
