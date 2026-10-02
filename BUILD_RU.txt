@@ -1,0 +1,1 @@
+Compile MQL5/Experts/Acteck v 4.1.mq5 (F7) → Acteck v 4.1.ex5
