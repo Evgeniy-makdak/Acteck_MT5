@@ -172,6 +172,11 @@ Q: Как включить ЗУ / ПД / каскад обратно?
 A: Inputs → ShowDecisionZones / ShowPullbackZones / ShowCascadeMarks = true → OK.
    Подписи: ShowStructureLabels=true. Паттерны 01…12: ShowAll12Patterns=true.
 
+Q: Пропал Спрос/Предложение и линия «30» после Load пресета?
+A: Старые .set держали ShowLiquidityZones/ShowDecisionZones/ShowPullbackZones=false.
+   С 2026-10-02 пресеты v4.1 включают их + ShowFib30. Перезагрузите пресет из папки проекта
+   (или вручную поставьте true → OK). Линия «30» рисуется только при наличии ПД/ЗУ.
+
 Q: Откуда линия «30»? Почему не совпадает с моим Fib?
 A: От импульса последней ПД/ЗУ (0%=конец, 100%=начало), НЕ от дня.
    Сверьте якоря: тот же импульс → уровень совпадёт. Выкл.: ShowFib30=false.

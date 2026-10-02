@@ -37,3 +37,13 @@ PAIR = EURUSD | GBPUSD | USDJPY | USDCHF
 - По умолчанию: RGB-чёрточки без рамки (`SightShowFrame=false`).
 
 Документы обновлены: `README.md`, `UserGuide_…`, `TZ_…`, `docs/SNIPER_VISUAL_PARITY_RU.md`, `docs/ALGORITHM_BEGINNER_RU.md`.
+
+---
+
+## 2026-10-02 — пресеты снова рисуют зоны
+
+Причина пропажи «Спрос/Предложение» и «30» после Load: во всех `Acteck_v4.1_*.set` стояло
+`ShowLiquidityZones=false`, `ShowDecisionZones=false`, `ShowPullbackZones=false`
+(режим «чистый UI»). Fib30 без ПД/ЗУ не строится.
+
+Исправлено во всех 12 пресетах: liquidity + ЗУ + ПД + `ShowFib30=true`, заливка зон выкл.
