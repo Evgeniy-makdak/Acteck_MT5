@@ -3775,7 +3775,7 @@ void DetectPattern_Expansions(const MqlRates &rates[], const SPivot &swings[], c
       double X = range_hi - range_lo;
       if(X <= PointValue() * 5.0) continue;
       if(atr > 0.0 && X < 0.5 * atr) continue;
-      datetime range_end = MathMax(t_hi, t_lo);
+      datetime range_end = (t_hi > t_lo ? t_hi : t_lo);
 
       bool swept_high = false, swept_low = false;
       datetime t_sweep_h = 0, t_sweep_l = 0;
