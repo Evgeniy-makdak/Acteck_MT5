@@ -3586,9 +3586,12 @@ void DrawStructureZone(const SStructureZone &z)
    ObjectSetInteger(0, base + "_OL", OBJPROP_ZORDER, 1);
    ObjectSetInteger(0, base + "_OL", OBJPROP_SELECTABLE, false);
 
-   // --- Sniper-PRO: только линия «30» (без оранжевых областей) ---
-   // На эталоне: Fib 0% = конец импульса, 100% = начало; «30» — тонкая синяя черта.
-   // Уровень = imp_end + 0.3*(imp_start − imp_end). НЕ day high/low.
+   // --- Sniper-PRO: линия «30» ---
+   // Ориентация как у ручного Fib на эталоне:
+   //   Точка1 / 100% = НАЧАЛО импульса
+   //   Точка2 / 0%   = КОНЕЦ импульса (экстремум)
+   //   «30» = от КОНЦА к началу: tip + 0.3*(origin − tip)
+   // На импульсе ВНИЗ «30» у НИЗА сетки (у 0%), НЕ у вершины (не у 100%).
    if(ShowFib30 && (z.kind == SK_PD || z.kind == SK_ZU) && z.valid)
    {
       int max_id = z.id;
@@ -3604,11 +3607,27 @@ void DrawStructureZone(const SStructureZone &z)
          double b = z.imp_end;
          if(a != 0.0 && b != 0.0)
          {
-            double move = MathAbs(a - b);
+            // Нормализация якорей (если start/end когда-то перепутаны при записи):
+            // tip  = конец импульса (0%) — экстремум, от которого откладывают ЗУ;
+            // origin = начало (100%).
+            // ПД BUY / ЗУ SELL: tip = low;  ПД SELL / ЗУ BUY: tip = high.
+            double tip, origin;
+            const bool tip_is_high = (z.kind == SK_ZU) ? (z.direction > 0) : (z.direction < 0);
+            if(tip_is_high)
+            {
+               tip    = MathMax(a, b);
+               origin = MathMin(a, b);
+            }
+            else
+            {
+               tip    = MathMin(a, b);
+               origin = MathMax(a, b);
+            }
+            double move = MathAbs(origin - tip);
             if(move > PointValue() * 5.0)
             {
-               double fib = b + (a - b) * (ZU_SizePctOfMove / 100.0);
-               // старую заливку FIB30_BAND снести, если осталась
+               // 30% пути от 0% (tip) к 100% (origin) — рядом с КОНЦОМ импульса
+               double fib = tip + (origin - tip) * (ZU_SizePctOfMove / 100.0);
                string zb = Prefix() + "FIB30_BAND";
                if(ObjExists(zb))
                   ObjectDelete(0, zb);
