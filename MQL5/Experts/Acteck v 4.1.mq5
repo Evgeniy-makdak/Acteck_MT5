@@ -3259,14 +3259,14 @@ void PushProbability(const int value)
    g_lastProbability = value;
 }
 
-void HudLabel(const string name, const int x, const int y,
-              const string text, const color clr, const int font_size,
-              const string font = "Arial")
+void HudLabelEx(const string name, const int x, const int y,
+                const string text, const color clr, const int font_size,
+                const ENUM_ANCHOR_POINT anchor, const string font = "Arial")
 {
    if(!ObjExists(name))
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
-   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
@@ -3276,6 +3276,13 @@ void HudLabel(const string name, const int x, const int y,
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_BACK, false);
    ObjectSetInteger(0, name, OBJPROP_ZORDER, 200);
+}
+
+void HudLabel(const string name, const int x, const int y,
+              const string text, const color clr, const int font_size,
+              const string font = "Arial")
+{
+   HudLabelEx(name, x, y, text, clr, font_size, ANCHOR_RIGHT_UPPER, font);
 }
 
 void UpdateProbabilityHUD(const int display_value)
@@ -3288,15 +3295,22 @@ void UpdateProbabilityHUD(const int display_value)
    if(display_value >= 60) c = ColorProbHigh;
    else if(display_value < ProbMinToTrade) c = ColorProbLow;
 
-   // Число крупно; подпись ВЫШЕ сервисной строки не лезем — коротко и ниже числа
+   // Вертикальный стек: число (верх) → зазор → «% объёма» → ломаная.
+   // YDISTANCE + ANCHOR_RIGHT_UPPER: на Retina/Wine шрифт 28 занимает ~40–48 px по высоте.
    const int pad = 14;
-   HudLabel(Prefix() + "PROB_NUM",   pad, 58, IntegerToString(display_value), c, 28, "Arial Bold");
-   HudLabel(Prefix() + "PROB_TITLE", pad, 100, "% объёма", clrGray, 8);
+   const int num_size = 28;
+   const int y_num = 52;
+   const int gap_after_num = 48;   // запас под Bold 28 (не 42 — иначе снова налезает)
+   const int y_pct = y_num + gap_after_num;
+   const int y_spark = y_pct + 16;
+
+   HudLabel(Prefix() + "PROB_NUM", pad, y_num,
+            IntegerToString(display_value), c, num_size, "Arial Bold");
+   HudLabel(Prefix() + "PROB_PCT", pad, y_pct, "% объёма", clrGray, 8);
 
    int n = ArraySize(g_probHistory);
    int from = MathMax(0, n - 10);
-   int bars = n - from;
-   if(bars < 2)
+   if(n - from < 2)
       return;
 
    string spark = "";
@@ -3307,7 +3321,8 @@ void UpdateProbabilityHUD(const int display_value)
       else if(v >= 45) spark += "-";
       else spark += "\\";
    }
-   HudLabel(Prefix() + "PROB_SPARK", pad + 48, 68, spark, c, 11, "Courier New");
+   // Ломаная под подписью, не на цифре
+   HudLabel(Prefix() + "PROB_SPARK", pad + 8, y_spark, spark, c, 10, "Courier New");
 }
 
 // Контекстная вероятность (без сигнала A/B/C): насколько «созрела» зона для входа объёмом.
