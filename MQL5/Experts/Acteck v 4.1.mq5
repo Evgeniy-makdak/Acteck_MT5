@@ -324,7 +324,6 @@ input int                  IntrabarSeconds      = 5;
 int      g_hEMA = INVALID_HANDLE;
 int      g_hATR_Filter = INVALID_HANDLE;
 int      g_hATR_Zone = INVALID_HANDLE;
-int      g_hATR_Slow = INVALID_HANDLE;
 
 datetime g_lastBarTime = 0;
 datetime g_lastTradeBarTime = 0;
@@ -461,7 +460,6 @@ int      g_lastSightDirAlert = 0;
 datetime g_lastSessionAlertDay = 0;
 string   g_alertLastKey = "";
 datetime g_alertLastTime = 0;
-int      g_patternsFoundBar = 0;
 
 // Forward declarations (MQL5: call sites before definitions)
 string ShortTFName(const ENUM_TIMEFRAMES tf);
@@ -3004,8 +3002,10 @@ int ComputeProbability(const string sig, const int direction, const MqlRates &ba
       GetBufferValue(g_hATR_Filter, 1, atr_b);
       if(atr_b > 0.0)
       {
-         if(direction > 0 && NearPrice(bar.low, g_boundLow, 0.5 * atr_b)) score += 5;
-         if(direction < 0 && NearPrice(bar.high, g_boundHigh, 0.5 * atr_b)) score += 5;
+         bool at_bound = (direction > 0 && NearPrice(bar.low, g_boundLow, 0.5 * atr_b))
+                      || (direction < 0 && NearPrice(bar.high, g_boundHigh, 0.5 * atr_b));
+         if(at_bound)
+            score += (PreferEntryInChannel ? 10 : 5);
       }
    }
    if(UseVirtualTF && DetectMTFConfluence(direction))
@@ -3574,7 +3574,9 @@ void DetectPattern_PD_T1(const MqlRates &rates[], const SPivot &swings[], const 
 
       datetime deadline = b.t + (datetime)(MathMax(1, PD_RetestMaxHours) * 3600);
       if(now_t > deadline) continue;
-      datetime t2 = MathMin(now_t + (datetime)(sec * 30), deadline + (datetime)(sec * 10));
+      datetime t2a = now_t + (datetime)(sec * 30);
+      datetime t2b = deadline + (datetime)(sec * 10);
+      datetime t2 = (t2a < t2b ? t2a : t2b);
       double zh = MathMax(PointValue() * 8.0, (atr > 0 ? ZU_HeightATR_Mult * atr : impulse * 0.15));
 
       if(a.type == 1 && b.type == -1 && c.type == 1)
@@ -3654,7 +3656,7 @@ void DetectPattern_PD_T2(const MqlRates &rates[], const SPivot &swings[], const 
       datetime pd_t = nxt.t;
       datetime deadline = pd_t + (datetime)(MathMax(1, PD_RetestMaxHours) * 3600);
       if(now_t > deadline) continue;
-      if(RangeHadConsolidation(rates, pd_t, MathMin(now_t, deadline), atr))
+      if(RangeHadConsolidation(rates, pd_t, (now_t < deadline ? now_t : deadline), atr))
          continue; // появились диапазоны — отмена тип2
 
       bool tested = false;
@@ -3675,7 +3677,9 @@ void DetectPattern_PD_T2(const MqlRates &rates[], const SPivot &swings[], const 
 
       string lab = StringFormat("%s %s blue%s", PatternName(PAT_PD_T2), (dir>0?"BUY":"SELL"),
                                 tested ? " TEST" : " wait");
-      PushStructureZoneEx(SK_PD, PAT_PD_T2, dir, pd_t, MathMin(now_t + (datetime)(sec*20), deadline),
+      datetime t2_pd = now_t + (datetime)(sec*20);
+      if(deadline < t2_pd) t2_pd = deadline;
+      PushStructureZoneEx(SK_PD, PAT_PD_T2, dir, pd_t, t2_pd,
                           z_hi, z_lo, X, brk_pct, lab, true, tf_tag);
       break; // только 1-е ПД
    }
@@ -4037,19 +4041,6 @@ bool BalanceRSIAllows(const int direction)
    if(direction > 0 && rsi >= BalanceRSI_OB) return false;
    if(direction < 0 && rsi <= BalanceRSI_OS) return false;
    return true;
-}
-
-int DominantStructureDirection()
-{
-   // последний валидный паттерн/ЗУ/ПД
-   for(int i = ArraySize(g_structZones) - 1; i >= 0; i--)
-   {
-      if(!g_structZones[i].active || !g_structZones[i].valid) continue;
-      if(g_structZones[i].kind == SK_RM) continue;
-      if(g_structZones[i].direction != 0)
-         return g_structZones[i].direction;
-   }
-   return 0;
 }
 
 void RunPatternEngineOnRates(const MqlRates &rates[], const string tf_tag, const int depth)
@@ -5473,8 +5464,6 @@ void OnDeinit(const int reason)
       IndicatorRelease(g_hATR_Zone);
    if(g_hRSI != INVALID_HANDLE)
       IndicatorRelease(g_hRSI);
-   if(g_hATR_Slow != INVALID_HANDLE)
-      IndicatorRelease(g_hATR_Slow);
 
    DeleteObjectsByPrefix(Prefix());
 }
