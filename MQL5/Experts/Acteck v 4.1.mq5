@@ -3538,6 +3538,88 @@ void ClearStructureObjects()
    DeleteObjectsWithPrefix(Prefix() + "FIB30");
 }
 
+void DrawFib30Line()
+{
+   // Ручной Fib эталон: 100%=начало, 0%=конец. «30» = 0% + 30% хода → РЯДОМ С КОНЦОМ.
+   // На импульсе ВНИЗ (ПРИЦЕЛ SELL): 0% внизу → «30» У НИЗА, не у вершины.
+   if(!ShowFib30)
+      return;
+
+   string zb = Prefix() + "FIB30_BAND";
+   if(ObjExists(zb)) ObjectDelete(0, zb);
+   string fn = Prefix() + "FIB30";
+   string ft = Prefix() + "FIB30_T";
+
+   int best = -1;
+   double best_score = -1.0;
+   for(int j = 0; j < ArraySize(g_structZones); j++)
+   {
+      if(!g_structZones[j].active || !g_structZones[j].valid) continue;
+      if(g_structZones[j].kind != SK_PD && g_structZones[j].kind != SK_ZU) continue;
+      double a = g_structZones[j].imp_start;
+      double b = g_structZones[j].imp_end;
+      if(a == 0.0 || b == 0.0) continue;
+      double move = MathAbs(a - b);
+      if(move <= PointValue() * 5.0) continue;
+      double score = move;
+      // приоритет: совпадение со стороной прицела + ЗУ чуть выше ПД
+      if(g_sightActive && g_sightDirection != 0 && g_structZones[j].direction == g_sightDirection)
+         score *= 3.0;
+      if(g_structZones[j].kind == SK_ZU)
+         score *= 1.25;
+      score += 0.0001 * (double)g_structZones[j].id; // при равенстве — свежее
+      if(score > best_score)
+      {
+         best_score = score;
+         best = j;
+      }
+   }
+   if(best < 0)
+   {
+      if(ObjExists(fn)) ObjectDelete(0, fn);
+      if(ObjExists(ft)) ObjectDelete(0, ft);
+      return;
+   }
+
+   SStructureZone z = g_structZones[best];
+   double lo = MathMin(z.imp_start, z.imp_end);
+   double hi = MathMax(z.imp_start, z.imp_end);
+
+   // Где конец импульса (0%)?
+   // Прицел SELL / продажа → конец ВНИЗУ (low). Прицел BUY → конец ВВЕРХУ (high).
+   // Без прицела: ЗУ по direction; ПД BUY=лой, ПД SELL=хай.
+   bool end_at_low;
+   if(g_sightActive && g_sightDirection != 0)
+      end_at_low = (g_sightDirection < 0);
+   else if(z.kind == SK_PD)
+      end_at_low = (z.direction > 0);
+   else
+      end_at_low = (z.direction < 0);
+
+   double tip    = end_at_low ? lo : hi; // 0%
+   double origin = end_at_low ? hi : lo; // 100%
+   double fib    = tip + (origin - tip) * (ZU_SizePctOfMove / 100.0);
+
+   datetime t1 = z.t1;
+   datetime t2 = z.t2;
+   if(t2 < t1) { datetime tw = t1; t1 = t2; t2 = tw; }
+
+   if(!ObjExists(fn))
+      ObjectCreate(0, fn, OBJ_TREND, 0, t1, fib, t2, fib);
+   ObjectMove(0, fn, 0, t1, fib);
+   ObjectMove(0, fn, 1, t2, fib);
+   ObjectSetInteger(0, fn, OBJPROP_COLOR, ColorFib30);
+   ObjectSetInteger(0, fn, OBJPROP_STYLE, STYLE_SOLID);
+   ObjectSetInteger(0, fn, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, fn, OBJPROP_RAY_RIGHT, false);
+   ObjectSetInteger(0, fn, OBJPROP_BACK, false);
+   ObjectSetInteger(0, fn, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, fn, OBJPROP_ZORDER, 50);
+   DrawText(ft, t2, fib, "30", ColorFib30, ANCHOR_LEFT_LOWER);
+   ObjectSetInteger(0, ft, OBJPROP_FONTSIZE, 9);
+   ObjectSetInteger(0, ft, OBJPROP_ZORDER, 51);
+}
+
 void DrawStructureZone(const SStructureZone &z)
 {
    if(!z.active)
@@ -3586,72 +3668,7 @@ void DrawStructureZone(const SStructureZone &z)
    ObjectSetInteger(0, base + "_OL", OBJPROP_ZORDER, 1);
    ObjectSetInteger(0, base + "_OL", OBJPROP_SELECTABLE, false);
 
-   // --- Sniper-PRO: линия «30» ---
-   // Ориентация как у ручного Fib на эталоне:
-   //   Точка1 / 100% = НАЧАЛО импульса
-   //   Точка2 / 0%   = КОНЕЦ импульса (экстремум)
-   //   «30» = от КОНЦА к началу: tip + 0.3*(origin − tip)
-   // На импульсе ВНИЗ «30» у НИЗА сетки (у 0%), НЕ у вершины (не у 100%).
-   if(ShowFib30 && (z.kind == SK_PD || z.kind == SK_ZU) && z.valid)
-   {
-      int max_id = z.id;
-      for(int j = 0; j < ArraySize(g_structZones); j++)
-      {
-         if(!g_structZones[j].active || !g_structZones[j].valid) continue;
-         if(g_structZones[j].kind != SK_PD && g_structZones[j].kind != SK_ZU) continue;
-         if(g_structZones[j].id > max_id) max_id = g_structZones[j].id;
-      }
-      if(z.id == max_id)
-      {
-         double a = z.imp_start;
-         double b = z.imp_end;
-         if(a != 0.0 && b != 0.0)
-         {
-            // Нормализация якорей (если start/end когда-то перепутаны при записи):
-            // tip  = конец импульса (0%) — экстремум, от которого откладывают ЗУ;
-            // origin = начало (100%).
-            // ПД BUY / ЗУ SELL: tip = low;  ПД SELL / ЗУ BUY: tip = high.
-            double tip, origin;
-            const bool tip_is_high = (z.kind == SK_ZU) ? (z.direction > 0) : (z.direction < 0);
-            if(tip_is_high)
-            {
-               tip    = MathMax(a, b);
-               origin = MathMin(a, b);
-            }
-            else
-            {
-               tip    = MathMin(a, b);
-               origin = MathMax(a, b);
-            }
-            double move = MathAbs(origin - tip);
-            if(move > PointValue() * 5.0)
-            {
-               // 30% пути от 0% (tip) к 100% (origin) — рядом с КОНЦОМ импульса
-               double fib = tip + (origin - tip) * (ZU_SizePctOfMove / 100.0);
-               string zb = Prefix() + "FIB30_BAND";
-               if(ObjExists(zb))
-                  ObjectDelete(0, zb);
-
-               string fn = Prefix() + "FIB30";
-               string ft = Prefix() + "FIB30_T";
-               if(!ObjExists(fn))
-                  ObjectCreate(0, fn, OBJ_TREND, 0, z.t1, fib, z.t2, fib);
-               ObjectMove(0, fn, 0, z.t1, fib);
-               ObjectMove(0, fn, 1, z.t2, fib);
-               ObjectSetInteger(0, fn, OBJPROP_COLOR, ColorFib30);
-               ObjectSetInteger(0, fn, OBJPROP_STYLE, STYLE_SOLID);
-               ObjectSetInteger(0, fn, OBJPROP_WIDTH, 1);
-               ObjectSetInteger(0, fn, OBJPROP_RAY_RIGHT, false);
-               ObjectSetInteger(0, fn, OBJPROP_BACK, false);
-               ObjectSetInteger(0, fn, OBJPROP_SELECTABLE, false);
-               ObjectSetInteger(0, fn, OBJPROP_ZORDER, 50);
-               DrawText(ft, z.t2, fib, "30", ColorFib30, ANCHOR_LEFT_LOWER);
-               ObjectSetInteger(0, ft, OBJPROP_FONTSIZE, 8);
-               ObjectSetInteger(0, ft, OBJPROP_ZORDER, 51);
-            }
-         }
-      }
-   }
+   // линия «30» рисуется один раз в DrawFib30Line() после всех зон
 
    if(ShowStructureLabels)
    {
@@ -4471,6 +4488,7 @@ void UpdateSniperStructures(const MqlRates &rates[])
          continue;
       DrawStructureZone(g_structZones[i]);
    }
+   DrawFib30Line();
 }
 
 
