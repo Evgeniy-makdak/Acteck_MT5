@@ -3538,10 +3538,10 @@ void ClearStructureObjects()
    DeleteObjectsWithPrefix(Prefix() + "FIB30");
 }
 
-void DrawFib30Line()
+void DrawFib30Line(const MqlRates &rates[])
 {
-   // Эталон ручного Fib (твой скрин): 100% = начало сверху, 0% = конец снизу на ходе вниз.
-   // Красная «30» на сетке = lo + 0.3*(hi−lo) — У НИЗА. Синяя Acteck должна совпасть с ней.
+   // Как ручной Fib: 100%=начало, 0%=конец, «30» = 0%+30% хода — строго ВНУТРИ импульса.
+   // Якоря = последний значимый свинг high→low (SELL) или low→high (BUY), не чужой deep lo зоны.
    if(!ShowFib30)
       return;
 
@@ -3549,64 +3549,75 @@ void DrawFib30Line()
    if(ObjExists(zb)) ObjectDelete(0, zb);
    string fn = Prefix() + "FIB30";
    string ft = Prefix() + "FIB30_T";
-
-   int best = -1;
-   double best_score = -1.0;
-   for(int j = 0; j < ArraySize(g_structZones); j++)
-   {
-      if(!g_structZones[j].active || !g_structZones[j].valid) continue;
-      if(g_structZones[j].kind != SK_PD && g_structZones[j].kind != SK_ZU) continue;
-      double a = g_structZones[j].imp_start;
-      double b = g_structZones[j].imp_end;
-      if(a == 0.0 || b == 0.0) continue;
-      double move = MathAbs(a - b);
-      if(move <= PointValue() * 5.0) continue;
-      double score = move;
-      if(g_sightActive && g_sightDirection != 0 && g_structZones[j].direction == g_sightDirection)
-         score *= 3.0;
-      if(g_structZones[j].kind == SK_ZU)
-         score *= 1.5;
-      // предпочтение импульсу вниз (start>end) — как на эталонных скринах
-      if(a > b)
-         score *= 1.35;
-      score += 0.0001 * (double)g_structZones[j].id;
-      if(score > best_score)
-      {
-         best_score = score;
-         best = j;
-      }
-   }
-   if(best < 0)
+   if(ArraySize(rates) < 30)
    {
       if(ObjExists(fn)) ObjectDelete(0, fn);
       if(ObjExists(ft)) ObjectDelete(0, ft);
       return;
    }
 
-   SStructureZone z = g_structZones[best];
-   double lo = MathMin(z.imp_start, z.imp_end);
-   double hi = MathMax(z.imp_start, z.imp_end);
+   SPivot swings[];
+   if(!BuildSwingPointsTF(rates, swings, 48, EffectiveSwingDepth()) || ArraySize(swings) < 2)
+   {
+      if(ObjExists(fn)) ObjectDelete(0, fn);
+      if(ObjExists(ft)) ObjectDelete(0, ft);
+      return;
+   }
+   const int n = ArraySize(swings);
+   const bool want_down = !(g_sightActive && g_sightDirection > 0);
 
-   // Где 0% (конец)? На ходе вниз — ВНИЗУ (lo). На ходе вверх — ВВЕРХУ (hi).
-   // По умолчанию (и при SELL) — вниз, чтобы совпасть с красной «30» на Fib 100↑→0↓.
-   bool tip_at_low = true;
-   if(g_sightActive && g_sightDirection > 0)
-      tip_at_low = false;                         // BUY → 0% на хае
-   else if(g_sightActive && g_sightDirection < 0)
-      tip_at_low = true;                          // SELL → 0% на лое
-   else if(z.kind == SK_ZU && z.direction > 0)
-      tip_at_low = false;                         // ЗУ BUY
-   else if(z.imp_start < z.imp_end && z.kind == SK_PD && z.direction < 0)
-      tip_at_low = true;                          // ПД SELL: якоря up, но Fib рисуем как 0% у lo (сетка вниз)
-   // иначе tip_at_low = true (down / SELL / default)
+   double origin = 0.0, tip = 0.0;
+   datetime t_a = 0;
+   // Берём САМЫЙ СВЕЖИЙ импульс нужного направления (как ручной Fib на последнем ходе)
+   for(int i = n - 1; i >= 1; i--)
+   {
+      if(want_down)
+      {
+         if(swings[i].type != -1) continue;
+         int jh = -1;
+         for(int j = i - 1; j >= 0; j--)
+            if(swings[j].type == 1) { jh = j; break; }
+         if(jh < 0 || swings[jh].p <= swings[i].p) continue;
+         origin = swings[jh].p;
+         tip    = swings[i].p;
+         t_a    = swings[jh].t;
+         break;
+      }
+      else
+      {
+         if(swings[i].type != 1) continue;
+         int jl = -1;
+         for(int j = i - 1; j >= 0; j--)
+            if(swings[j].type == -1) { jl = j; break; }
+         if(jl < 0 || swings[i].p <= swings[jl].p) continue;
+         origin = swings[jl].p;
+         tip    = swings[i].p;
+         t_a    = swings[jl].t;
+         break;
+      }
+   }
 
-   double tip    = tip_at_low ? lo : hi; // 0%
-   double origin = tip_at_low ? hi : lo; // 100%
-   double fib    = tip + (origin - tip) * (ZU_SizePctOfMove / 100.0);
+   const double best_move = MathAbs(origin - tip);
+   if(best_move <= PointValue() * 5.0 || origin == 0.0 || tip == 0.0)
+   {
+      if(ObjExists(fn)) ObjectDelete(0, fn);
+      if(ObjExists(ft)) ObjectDelete(0, ft);
+      return;
+   }
 
-   datetime t1 = z.t1;
-   datetime t2 = z.t2;
-   if(t2 < t1) { datetime tw = t1; t1 = t2; t2 = tw; }
+   double fib = tip + (origin - tip) * (ZU_SizePctOfMove / 100.0);
+   double lo = MathMin(origin, tip);
+   double hi = MathMax(origin, tip);
+   if(fib <= lo || fib >= hi)
+   {
+      // невалидно — не рисуем мусор под сеткой
+      if(ObjExists(fn)) ObjectDelete(0, fn);
+      if(ObjExists(ft)) ObjectDelete(0, ft);
+      return;
+   }
+
+   datetime t1 = t_a;
+   datetime t2 = rates[0].time + (datetime)(PeriodSeconds(Timeframe) * MathMax(8, SightBarsWidth));
 
    if(!ObjExists(fn))
       ObjectCreate(0, fn, OBJ_TREND, 0, t1, fib, t2, fib);
@@ -4528,7 +4539,7 @@ void RefreshSniperContext(const MqlRates &rates[])
    UpdateLiquidityZones(rates);
    UpdateSniperStructures(rates); // ЗУ / ПД / каскад / РМ (на закрытии бара)
    UpdateSight(rates);            // сторона прицела ДО Fib30
-   DrawFib30Line();               // «30» у 0% (вниз → у низа сетки, как красная 30 на Fib)
+   DrawFib30Line(rates);          // «30» внутри импульса свинга (= красная 30 на Fib)
    ApplyProbabilityHUD(true);
 }
 
@@ -4557,7 +4568,7 @@ void RefreshContextLive()
    else
       UpdateSight(rates);
 
-   DrawFib30Line(); // подтянуть «30» если прицел/якоря дышат
+   DrawFib30Line(rates); // подтянуть «30» к актуальному свингу
 
    ApplyProbabilityHUD(false);
 }
