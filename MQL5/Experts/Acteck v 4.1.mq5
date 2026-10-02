@@ -832,14 +832,9 @@ void InitSymbolStrategyEffective()
 //=========================
 void DeleteObjectsByPrefix(const string pfx)
 {
-   const long chart_id = 0;
-   int total = ObjectsTotal(chart_id, 0, -1);
-   for(int i = total - 1; i >= 0; i--)
-   {
-      string name = ObjectName(chart_id, i, 0, -1);
-      if(StringFind(name, pfx) == 0)
-         ObjectDelete(chart_id, name);
-   }
+   // Встроенный API надёжнее ручного цикла: все подокна и типы объектов.
+   if(StringLen(pfx) > 0)
+      ObjectsDeleteAll(0, pfx);
 }
 
 bool ObjExists(const string name)
@@ -2376,13 +2371,17 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
 //=========================
 void DeleteObjectsWithPrefix(const string pfx)
 {
-   int total = ObjectsTotal(0, 0, -1);
-   for(int i = total - 1; i >= 0; i--)
-   {
-      string name = ObjectName(0, i, 0, -1);
-      if(StringFind(name, pfx) == 0)
-         ObjectDelete(0, name);
-   }
+   DeleteObjectsByPrefix(pfx);
+}
+
+void CleanupChartGraphics()
+{
+   // Текущий префикс + запасной «Acteck_» (если CommentPrefix меняли в Inputs).
+   DeleteObjectsByPrefix(Prefix());
+   if(Prefix() != "Acteck_")
+      DeleteObjectsByPrefix("Acteck_");
+   Comment("");
+   ChartRedraw(0);
 }
 
 int NormalizeHour(const int h)
@@ -3231,12 +3230,12 @@ void UpdateProbabilityHUD(const int display_value)
    if(display_value >= 60) c = ColorProbHigh;
    else if(display_value < ProbMinToTrade) c = ColorProbLow;
 
-   // Стек ниже сервисной строки терминала «Acteck v 4.1» (правый верх).
-   // Без дубля «Прицел: …» — сторона уже на прямоугольнике прицела.
-   const int pad = 14;
-   HudLabel(Prefix() + "PROB_TITLE", pad, 36, "Вероятность", clrDimGray, 9);
-   HudLabel(Prefix() + "PROB_NUM",   pad, 54, IntegerToString(display_value), c, 26, "Arial Bold");
-   HudLabel(Prefix() + "PROB_PCT",   pad, 90, "% объёма", clrGray, 8);
+   // Правый верх, крупный шаг по Y: число ~26–36 px высотой (Retina/Wine),
+   // поэтому «% объёма» только ПОД цифрой, не на ней.
+   const int pad = 16;
+   HudLabel(Prefix() + "PROB_TITLE", pad, 48, "Вероятность", clrDimGray, 9);
+   HudLabel(Prefix() + "PROB_NUM",   pad, 70, IntegerToString(display_value) + "%", c, 28, "Arial Bold");
+   HudLabel(Prefix() + "PROB_PCT",   pad, 118, "от объёма", clrGray, 8);
 
    string spark = "";
    int n = ArraySize(g_probHistory);
@@ -3249,7 +3248,7 @@ void UpdateProbabilityHUD(const int display_value)
       else spark += ".";
    }
    if(spark == "") spark = "....";
-   HudLabel(Prefix() + "PROB_SPARK", pad, 108, spark, c, 10, "Arial");
+   HudLabel(Prefix() + "PROB_SPARK", pad, 136, spark, c, 10, "Arial");
 }
 
 // Контекстная вероятность (без сигнала A/B/C): насколько «созрела» зона для входа объёмом.
@@ -5442,6 +5441,9 @@ int OnInit()
    if(TrySyncChartFromPreset())
       return INIT_SUCCEEDED; // ждём переинит на новом символе/ТФ
 
+   // Снять хвосты прошлой сессии (если OnDeinit раньше не дочистил)
+   CleanupChartGraphics();
+
    // reset
    g_zone.active = false;
    g_broken.active = false;
@@ -5569,7 +5571,12 @@ void OnDeinit(const int reason)
    if(g_hRSI != INVALID_HANDLE)
       IndicatorRelease(g_hRSI);
 
-   DeleteObjectsByPrefix(Prefix());
+   g_hEMA = INVALID_HANDLE;
+   g_hATR_Filter = INVALID_HANDLE;
+   g_hATR_Zone = INVALID_HANDLE;
+   g_hRSI = INVALID_HANDLE;
+
+   CleanupChartGraphics();
 }
 
 //=========================
