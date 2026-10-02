@@ -224,9 +224,9 @@ input bool                 ShowProbabilityHUD   = true;
 input bool                 ScaleLotByProbability = true;  // volume *= prob/100
 input int                  ProbMinToTrade       = 35;     // 0 = off; block entries below
 input int                  ProbHistoryLen       = 24;     // sparkline points
-input color                ColorProbHigh        = clrLimeGreen;
-input color                ColorProbMid         = clrGold;
-input color                ColorProbLow         = clrTomato;
+input color                ColorProbHigh        = clrSeaGreen;
+input color                ColorProbMid         = clrDarkGoldenrod;
+input color                ColorProbLow         = clrIndianRed;
 
 input group "=== Sniper: Signal quality ==="
 input bool                 PreferLiquidityFade  = true;   // boost B near stop pools / session extremes
@@ -570,12 +570,14 @@ double NormalizeVolume(const double vol)
    return NormalizeDouble(vol, vd);
 }
 
-color ToARGB(const color c, const uchar alpha)
+// alpha: 0..255 (int, чтобы не было warning int→uchar на вызовах с тернарником)
+color ToARGB(const color c, const int alpha)
 {
+   uint a = (uint)MathMax(0, MathMin(255, alpha));
    uint r = (uint)c & 0xFF;
    uint g = ((uint)c >> 8) & 0xFF;
    uint b = ((uint)c >> 16) & 0xFF;
-   return (color)(((uint)alpha << 24) | (b << 16) | (g << 8) | r);
+   return (color)((a << 24) | (b << 16) | (g << 8) | r);
 }
 
 // Spread in points
@@ -629,8 +631,8 @@ void LogEnvironment()
    int stopLevel   = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    int freezeLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
 
-   Log(StringFormat("Init v%s | TerminalBuild=%d | ProgramBuild=%d | MarginMode=%s | Hedging=%s | Symbol=%s | TF=%s | Digits=%d | Point=%g | Vol(min/max/step)=%.2f/%.2f/%.2f | StopLevel=%d | FreezeLevel=%d",
-                    EA_VERSION, (int)term_build, (int)prog_build, EnumToString(mm), (g_isHedging ? "true" : "false"), _Symbol, EnumToString(Timeframe), digits, point, vmin, vmax, vstep, stopLevel, freezeLevel));
+   Log(StringFormat("Init v%s | TerminalBuild=%I64d | ProgramBuild=%I64d | MarginMode=%s | Hedging=%s | Symbol=%s | TF=%s | Digits=%d | Point=%g | Vol(min/max/step)=%.2f/%.2f/%.2f | StopLevel=%d | FreezeLevel=%d",
+                    EA_VERSION, term_build, prog_build, EnumToString(mm), (g_isHedging ? "true" : "false"), _Symbol, EnumToString(Timeframe), digits, point, vmin, vmax, vstep, stopLevel, freezeLevel));
 
    if(!g_isHedging)
       Log("WARNING: Account margin mode is not RETAIL_HEDGING. The EA is designed for hedging accounts (TZ 1.8). Trading/partial close behaviour may differ on netting accounts.");
@@ -2852,8 +2854,8 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
       t1 = rates[0].time;
    datetime t2 = rates[0].time + (datetime)(sec * MathMax(6, SightBarsWidth));
 
-   // Прицел — поверх остальной разметки (высокий ZORDER, яркая рамка)
-   color fill = ToARGB((g_sightDirection > 0) ? ColorSightBuy : ColorSightSell, 95);
+   // BUY = синий, SELL = красный/оранжевый (рамка + заливка). Не зависит от пары.
+   color fill = ToARGB((g_sightDirection > 0) ? ColorSightBuy : ColorSightSell, 70);
    color border = (g_sightDirection > 0) ? clrDodgerBlue : clrOrangeRed;
    string label = (g_sightDirection > 0) ? "▶ ПРИЦЕЛ BUY" : "▶ ПРИЦЕЛ SELL";
    double label_price = g_sightHigh + 8 * PointValue();
@@ -2871,14 +2873,14 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
       ObjectCreate(0, tl, OBJ_RECTANGLE, 0, t1, g_sightHigh, t2, g_sightLow);
       ObjectSetInteger(0, tl, OBJPROP_COLOR, border);
       ObjectSetInteger(0, tl, OBJPROP_STYLE, STYLE_SOLID);
-      ObjectSetInteger(0, tl, OBJPROP_WIDTH, 3);
+      ObjectSetInteger(0, tl, OBJPROP_WIDTH, 2);
       ObjectSetInteger(0, tl, OBJPROP_FILL, false);
       ObjectSetInteger(0, tl, OBJPROP_BACK, false);
       ObjectSetInteger(0, tl, OBJPROP_ZORDER, 101);
       ObjectSetInteger(0, tl, OBJPROP_SELECTABLE, false);
 
       DrawText(txt, t1, label_price, label, border, ANCHOR_LEFT_LOWER);
-      ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 11);
+      ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 10);
       ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
       g_sightDrawnDirection = g_sightDirection;
       return;
@@ -2893,13 +2895,13 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
    ObjectMove(0, tl, 0, t1, g_sightHigh);
    ObjectMove(0, tl, 1, t2, g_sightLow);
    ObjectSetInteger(0, tl, OBJPROP_COLOR, border);
-   ObjectSetInteger(0, tl, OBJPROP_WIDTH, 3);
+   ObjectSetInteger(0, tl, OBJPROP_WIDTH, 2);
    ObjectSetInteger(0, tl, OBJPROP_ZORDER, 101);
 
    ObjectMove(0, txt, 0, t1, label_price);
    ObjectSetString(0, txt, OBJPROP_TEXT, label);
    ObjectSetInteger(0, txt, OBJPROP_COLOR, border);
-   ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 11);
+   ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
 }
 
@@ -3200,6 +3202,25 @@ void PushProbability(const int value)
    g_lastProbability = value;
 }
 
+void HudLabel(const string name, const int x, const int y,
+              const string text, const color clr, const int font_size,
+              const string font = "Arial")
+{
+   if(!ObjExists(name))
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, font_size);
+   ObjectSetString(0, name, OBJPROP_FONT, font);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 200);
+}
+
 void UpdateProbabilityHUD(const int display_value)
 {
    DeleteObjectsWithPrefix(Prefix() + "PROB_");
@@ -3210,74 +3231,25 @@ void UpdateProbabilityHUD(const int display_value)
    if(display_value >= 60) c = ColorProbHigh;
    else if(display_value < ProbMinToTrade) c = ColorProbLow;
 
-   // Title
-   ObjectCreate(0, Prefix() + "PROB_TITLE", OBJ_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, Prefix() + "PROB_TITLE", OBJPROP_CORNER, CORNER_RIGHT_UPPER);
-   ObjectSetInteger(0, Prefix() + "PROB_TITLE", OBJPROP_XDISTANCE, 240);
-   ObjectSetInteger(0, Prefix() + "PROB_TITLE", OBJPROP_YDISTANCE, 18);
-   ObjectSetString(0, Prefix() + "PROB_TITLE", OBJPROP_TEXT, "Вероятность ACTECK");
-   ObjectSetInteger(0, Prefix() + "PROB_TITLE", OBJPROP_COLOR, clrDimGray);
-   ObjectSetInteger(0, Prefix() + "PROB_TITLE", OBJPROP_FONTSIZE, 9);
-   ObjectSetString(0, Prefix() + "PROB_TITLE", OBJPROP_FONT, "Arial");
-   ObjectSetInteger(0, Prefix() + "PROB_TITLE", OBJPROP_SELECTABLE, false);
+   // Стек ниже сервисной строки терминала «Acteck v 4.1» (правый верх).
+   // Без дубля «Прицел: …» — сторона уже на прямоугольнике прицела.
+   const int pad = 14;
+   HudLabel(Prefix() + "PROB_TITLE", pad, 36, "Вероятность", clrDimGray, 9);
+   HudLabel(Prefix() + "PROB_NUM",   pad, 54, IntegerToString(display_value), c, 26, "Arial Bold");
+   HudLabel(Prefix() + "PROB_PCT",   pad, 90, "% объёма", clrGray, 8);
 
-   // Big number
-   ObjectCreate(0, Prefix() + "PROB_NUM", OBJ_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, Prefix() + "PROB_NUM", OBJPROP_CORNER, CORNER_RIGHT_UPPER);
-   ObjectSetInteger(0, Prefix() + "PROB_NUM", OBJPROP_XDISTANCE, 110);
-   ObjectSetInteger(0, Prefix() + "PROB_NUM", OBJPROP_YDISTANCE, 36);
-   ObjectSetString(0, Prefix() + "PROB_NUM", OBJPROP_TEXT, IntegerToString(display_value));
-   ObjectSetInteger(0, Prefix() + "PROB_NUM", OBJPROP_COLOR, c);
-   ObjectSetInteger(0, Prefix() + "PROB_NUM", OBJPROP_FONTSIZE, 22);
-   ObjectSetString(0, Prefix() + "PROB_NUM", OBJPROP_FONT, "Arial Bold");
-   ObjectSetInteger(0, Prefix() + "PROB_NUM", OBJPROP_SELECTABLE, false);
-
-   // % hint
-   ObjectCreate(0, Prefix() + "PROB_PCT", OBJ_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, Prefix() + "PROB_PCT", OBJPROP_CORNER, CORNER_RIGHT_UPPER);
-   ObjectSetInteger(0, Prefix() + "PROB_PCT", OBJPROP_XDISTANCE, 110);
-   ObjectSetInteger(0, Prefix() + "PROB_PCT", OBJPROP_YDISTANCE, 62);
-   ObjectSetString(0, Prefix() + "PROB_PCT", OBJPROP_TEXT, "% объёма");
-   ObjectSetInteger(0, Prefix() + "PROB_PCT", OBJPROP_COLOR, clrGray);
-   ObjectSetInteger(0, Prefix() + "PROB_PCT", OBJPROP_FONTSIZE, 8);
-   ObjectSetInteger(0, Prefix() + "PROB_PCT", OBJPROP_SELECTABLE, false);
-
-   // Sparkline via bitmap-like polyline using OBJ_TREND in pixel? Not possible.
-   // Use stacked tiny labels approximating zig-zag with unicode / dashes, plus
-   // chart-anchored mini segments near the right price scale using last N pivots of probability.
-   // Practical approach: draw OBJ_LABEL sparkline as text bars.
    string spark = "";
    int n = ArraySize(g_probHistory);
-   int from = MathMax(0, n - 12);
+   int from = MathMax(0, n - 10);
    for(int i = from; i < n; i++)
    {
       int v = g_probHistory[i];
-      if(v >= 70) spark += "/";
+      if(v >= 70) spark += "*";
       else if(v >= 45) spark += "-";
-      else spark += "\\";
+      else spark += ".";
    }
-   if(spark == "") spark = "---";
-
-   ObjectCreate(0, Prefix() + "PROB_SPARK", OBJ_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, Prefix() + "PROB_SPARK", OBJPROP_CORNER, CORNER_RIGHT_UPPER);
-   ObjectSetInteger(0, Prefix() + "PROB_SPARK", OBJPROP_XDISTANCE, 240);
-   ObjectSetInteger(0, Prefix() + "PROB_SPARK", OBJPROP_YDISTANCE, 42);
-   ObjectSetString(0, Prefix() + "PROB_SPARK", OBJPROP_TEXT, spark);
-   ObjectSetInteger(0, Prefix() + "PROB_SPARK", OBJPROP_COLOR, c);
-   ObjectSetInteger(0, Prefix() + "PROB_SPARK", OBJPROP_FONTSIZE, 14);
-   ObjectSetString(0, Prefix() + "PROB_SPARK", OBJPROP_FONT, "Courier New");
-   ObjectSetInteger(0, Prefix() + "PROB_SPARK", OBJPROP_SELECTABLE, false);
-
-   // Context line
-   string ctx = g_sightActive ? ((g_sightDirection > 0) ? "Прицел: ПОКУПКА" : "Прицел: ПРОДАЖА") : "Прицел: —";
-   ObjectCreate(0, Prefix() + "PROB_CTX", OBJ_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, Prefix() + "PROB_CTX", OBJPROP_CORNER, CORNER_RIGHT_UPPER);
-   ObjectSetInteger(0, Prefix() + "PROB_CTX", OBJPROP_XDISTANCE, 240);
-   ObjectSetInteger(0, Prefix() + "PROB_CTX", OBJPROP_YDISTANCE, 66);
-   ObjectSetString(0, Prefix() + "PROB_CTX", OBJPROP_TEXT, ctx);
-   ObjectSetInteger(0, Prefix() + "PROB_CTX", OBJPROP_COLOR, clrDimGray);
-   ObjectSetInteger(0, Prefix() + "PROB_CTX", OBJPROP_FONTSIZE, 8);
-   ObjectSetInteger(0, Prefix() + "PROB_CTX", OBJPROP_SELECTABLE, false);
+   if(spark == "") spark = "....";
+   HudLabel(Prefix() + "PROB_SPARK", pad, 108, spark, c, 10, "Arial");
 }
 
 // Контекстная вероятность (без сигнала A/B/C): насколько «созрела» зона для входа объёмом.
@@ -3441,7 +3413,8 @@ void FireSniperAlert(const int alert_type, const string detail)
       return;
    string key = IntegerToString(alert_type) + "|" + detail;
    datetime now = TimeCurrent();
-   if(key == g_alertLastKey && (now - g_alertLastTime) < MathMax(5, AlertCooldownSec))
+   const long cooldown = (long)MathMax(5, AlertCooldownSec);
+   if(key == g_alertLastKey && (long)(now - g_alertLastTime) < cooldown)
       return;
    g_alertLastKey = key;
    g_alertLastTime = now;
