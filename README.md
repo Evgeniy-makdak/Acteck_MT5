@@ -12,7 +12,7 @@
 | `Acteck_v4.1_Manual_RU.pdf` | Руководство PDF (сводка; детали — в UserGuide) |
 | `TZ_Snayper_Pricel_MT5.txt` | Актуальное ТЗ v4.1 |
 | `docs/SNIPER_PARITY_V4_RU.md` | Матрица паритета со Sniper-Pro |
-| `docs/SNIPER_VISUAL_PARITY_RU.md` | Визуал: прицел, линия «30», HUD |
+| `docs/Acteck_Fib30_Explained_RU.pdf` | **Откуда «30»**: схема + сетка на скрине |
 | `docs/ALGORITHM_BEGINNER_RU.md` | Алгоритм для новичка |
 | `CHANGES_V4.1.md` | Changelog v4.1 |
 
