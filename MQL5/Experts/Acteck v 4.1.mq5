@@ -3540,8 +3540,11 @@ void ClearStructureObjects()
 
 void DrawFib30Line(const MqlRates &rates[])
 {
-   // Как ручной Fib: 100%=начало, 0%=конец, «30» = 0%+30% хода — строго ВНУТРИ импульса.
-   // Якоря = последний значимый свинг high→low (SELL) или low→high (BUY), не чужой deep lo зоны.
+   // Стандартное Fib текущего хода (как сказал пользователь):
+   //   Точка 1 = самый последний экстремум, от которого началось ТЕКУЩЕЕ движение
+   //            (откат от лоя → минимум; откат от хая → максимум)
+   //   Точка 2 = противоположный край этого же хода (к хаю / к лою)
+   //   «30» = Точка1 + 0.3×(Точка2 − Точка1)  // 30% пути от Т1 к Т2
    if(!ShowFib30)
       return;
 
@@ -3549,7 +3552,8 @@ void DrawFib30Line(const MqlRates &rates[])
    if(ObjExists(zb)) ObjectDelete(0, zb);
    string fn = Prefix() + "FIB30";
    string ft = Prefix() + "FIB30_T";
-   if(ArraySize(rates) < 30)
+   const int nr = ArraySize(rates);
+   if(nr < 30)
    {
       if(ObjExists(fn)) ObjectDelete(0, fn);
       if(ObjExists(ft)) ObjectDelete(0, ft);
@@ -3557,66 +3561,56 @@ void DrawFib30Line(const MqlRates &rates[])
    }
 
    SPivot swings[];
-   if(!BuildSwingPointsTF(rates, swings, 48, EffectiveSwingDepth()) || ArraySize(swings) < 2)
+   if(!BuildSwingPointsTF(rates, swings, 48, EffectiveSwingDepth()) || ArraySize(swings) < 1)
    {
       if(ObjExists(fn)) ObjectDelete(0, fn);
       if(ObjExists(ft)) ObjectDelete(0, ft);
       return;
    }
-   const int n = ArraySize(swings);
-   const bool want_down = !(g_sightActive && g_sightDirection > 0);
+   const int ns = ArraySize(swings);
+   // Точка 1 — последний свинг-экстремум
+   SPivot p1 = swings[ns - 1];
+   const datetime t1piv = p1.t;
+   const double   v1    = p1.p;
 
-   double origin = 0.0, tip = 0.0;
-   datetime t_a = 0;
-   // Берём САМЫЙ СВЕЖИЙ импульс нужного направления (как ручной Fib на последнем ходе)
-   for(int i = n - 1; i >= 1; i--)
+   // Точка 2 — экстремум цены после Точки 1 (текущий ход)
+   double v2 = v1;
+   bool have = false;
+   for(int i = 0; i < nr; i++)
    {
-      if(want_down)
+      if(rates[i].time < t1piv) break; // series: дальше только старее пивота
+      if(p1.type < 0)
       {
-         if(swings[i].type != -1) continue;
-         int jh = -1;
-         for(int j = i - 1; j >= 0; j--)
-            if(swings[j].type == 1) { jh = j; break; }
-         if(jh < 0 || swings[jh].p <= swings[i].p) continue;
-         origin = swings[jh].p;
-         tip    = swings[i].p;
-         t_a    = swings[jh].t;
-         break;
+         // от минимума → к максимуму хода
+         if(!have || rates[i].high > v2)
+         { v2 = rates[i].high; have = true; }
       }
-      else
+      else if(p1.type > 0)
       {
-         if(swings[i].type != 1) continue;
-         int jl = -1;
-         for(int j = i - 1; j >= 0; j--)
-            if(swings[j].type == -1) { jl = j; break; }
-         if(jl < 0 || swings[i].p <= swings[jl].p) continue;
-         origin = swings[jl].p;
-         tip    = swings[i].p;
-         t_a    = swings[jl].t;
-         break;
+         // от максимума → к минимуму хода
+         if(!have || rates[i].low < v2)
+         { v2 = rates[i].low; have = true; }
       }
    }
-
-   const double best_move = MathAbs(origin - tip);
-   if(best_move <= PointValue() * 5.0 || origin == 0.0 || tip == 0.0)
+   if(!have || MathAbs(v2 - v1) <= PointValue() * 5.0)
    {
       if(ObjExists(fn)) ObjectDelete(0, fn);
       if(ObjExists(ft)) ObjectDelete(0, ft);
       return;
    }
 
-   double fib = tip + (origin - tip) * (ZU_SizePctOfMove / 100.0);
-   double lo = MathMin(origin, tip);
-   double hi = MathMax(origin, tip);
-   if(fib <= lo || fib >= hi)
+   // 30% от Точки1 к Точке2 (стандартная доля хода)
+   double fib = v1 + (v2 - v1) * (ZU_SizePctOfMove / 100.0);
+   double lo = MathMin(v1, v2);
+   double hi = MathMax(v1, v2);
+   if(fib < lo || fib > hi)
    {
-      // невалидно — не рисуем мусор под сеткой
       if(ObjExists(fn)) ObjectDelete(0, fn);
       if(ObjExists(ft)) ObjectDelete(0, ft);
       return;
    }
 
-   datetime t1 = t_a;
+   datetime t1 = t1piv;
    datetime t2 = rates[0].time + (datetime)(PeriodSeconds(Timeframe) * MathMax(8, SightBarsWidth));
 
    if(!ObjExists(fn))
