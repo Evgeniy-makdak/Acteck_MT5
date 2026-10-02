@@ -3540,8 +3540,8 @@ void ClearStructureObjects()
 
 void DrawFib30Line()
 {
-   // Ручной Fib эталон: 100%=начало, 0%=конец. «30» = 0% + 30% хода → РЯДОМ С КОНЦОМ.
-   // На импульсе ВНИЗ (ПРИЦЕЛ SELL): 0% внизу → «30» У НИЗА, не у вершины.
+   // Эталон ручного Fib (твой скрин): 100% = начало сверху, 0% = конец снизу на ходе вниз.
+   // Красная «30» на сетке = lo + 0.3*(hi−lo) — У НИЗА. Синяя Acteck должна совпасть с ней.
    if(!ShowFib30)
       return;
 
@@ -3562,12 +3562,14 @@ void DrawFib30Line()
       double move = MathAbs(a - b);
       if(move <= PointValue() * 5.0) continue;
       double score = move;
-      // приоритет: совпадение со стороной прицела + ЗУ чуть выше ПД
       if(g_sightActive && g_sightDirection != 0 && g_structZones[j].direction == g_sightDirection)
          score *= 3.0;
       if(g_structZones[j].kind == SK_ZU)
-         score *= 1.25;
-      score += 0.0001 * (double)g_structZones[j].id; // при равенстве — свежее
+         score *= 1.5;
+      // предпочтение импульсу вниз (start>end) — как на эталонных скринах
+      if(a > b)
+         score *= 1.35;
+      score += 0.0001 * (double)g_structZones[j].id;
       if(score > best_score)
       {
          best_score = score;
@@ -3585,19 +3587,21 @@ void DrawFib30Line()
    double lo = MathMin(z.imp_start, z.imp_end);
    double hi = MathMax(z.imp_start, z.imp_end);
 
-   // Где конец импульса (0%)?
-   // Прицел SELL / продажа → конец ВНИЗУ (low). Прицел BUY → конец ВВЕРХУ (high).
-   // Без прицела: ЗУ по direction; ПД BUY=лой, ПД SELL=хай.
-   bool end_at_low;
-   if(g_sightActive && g_sightDirection != 0)
-      end_at_low = (g_sightDirection < 0);
-   else if(z.kind == SK_PD)
-      end_at_low = (z.direction > 0);
-   else
-      end_at_low = (z.direction < 0);
+   // Где 0% (конец)? На ходе вниз — ВНИЗУ (lo). На ходе вверх — ВВЕРХУ (hi).
+   // По умолчанию (и при SELL) — вниз, чтобы совпасть с красной «30» на Fib 100↑→0↓.
+   bool tip_at_low = true;
+   if(g_sightActive && g_sightDirection > 0)
+      tip_at_low = false;                         // BUY → 0% на хае
+   else if(g_sightActive && g_sightDirection < 0)
+      tip_at_low = true;                          // SELL → 0% на лое
+   else if(z.kind == SK_ZU && z.direction > 0)
+      tip_at_low = false;                         // ЗУ BUY
+   else if(z.imp_start < z.imp_end && z.kind == SK_PD && z.direction < 0)
+      tip_at_low = true;                          // ПД SELL: якоря up, но Fib рисуем как 0% у lo (сетка вниз)
+   // иначе tip_at_low = true (down / SELL / default)
 
-   double tip    = end_at_low ? lo : hi; // 0%
-   double origin = end_at_low ? hi : lo; // 100%
+   double tip    = tip_at_low ? lo : hi; // 0%
+   double origin = tip_at_low ? hi : lo; // 100%
    double fib    = tip + (origin - tip) * (ZU_SizePctOfMove / 100.0);
 
    datetime t1 = z.t1;
@@ -4488,7 +4492,7 @@ void UpdateSniperStructures(const MqlRates &rates[])
          continue;
       DrawStructureZone(g_structZones[i]);
    }
-   DrawFib30Line();
+   // Fib30 — после UpdateSight (см. RefreshSniperContext), здесь не рисуем
 }
 
 
@@ -4523,7 +4527,8 @@ void RefreshSniperContext(const MqlRates &rates[])
    DrawSessionLevels();
    UpdateLiquidityZones(rates);
    UpdateSniperStructures(rates); // ЗУ / ПД / каскад / РМ (на закрытии бара)
-   UpdateSight(rates);
+   UpdateSight(rates);            // сторона прицела ДО Fib30
+   DrawFib30Line();               // «30» у 0% (вниз → у низа сетки, как красная 30 на Fib)
    ApplyProbabilityHUD(true);
 }
 
@@ -4551,6 +4556,8 @@ void RefreshContextLive()
       MaintainSightIntrabar(rates);
    else
       UpdateSight(rates);
+
+   DrawFib30Line(); // подтянуть «30» если прицел/якоря дышат
 
    ApplyProbabilityHUD(false);
 }
