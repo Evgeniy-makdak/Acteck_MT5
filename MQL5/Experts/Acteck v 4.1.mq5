@@ -229,11 +229,24 @@ input color                ColorSightDashHi     = clrRed;
 input color                ColorSightDashMid    = clrLimeGreen;
 input color                ColorSightDashLo     = clrDodgerBlue;
 
-input group "=== Sniper: Probability HUD ==="
-input bool                 ShowProbabilityHUD   = true;
-input bool                 ScaleLotByProbability = true;  // volume *= prob/100
-input int                  ProbMinToTrade       = 35;     // 0 = off; block entries below
-input int                  ProbHistoryLen       = 24;     // sparkline points
+input group "=== Sniper: Fear Index (индекс страха) ==="
+input bool                 ShowFearIndexHUD     = true;   // число справа сверху = индекс страха 0..100
+input int                  FearIndexPeriod      = 14;     // период RSI-базы индекса
+input bool                 FilterByFearIndex    = true;   // на страхе не продаём, на жадности не покупаем
+input bool                 AutoTPByFearIndex    = true;   // TP = SL × множитель зоны индекса
+input bool                 UseSafeRule          = true;   // сейф: первая фиксация на расстоянии = стоп (1R)
+input bool                 ScaleLotBySetupQuality = false; // старый масштаб лота по «зрелости» сетапа (не индекс)
+input int                  SetupQualityMinToTrade = 0;    // 0 = выкл.; порог зрелости сетапа (не индекс страха)
+input int                  FearHistoryLen       = 24;     // точки истории для ломаной
+input color                ColorFearExtreme     = clrIndianRed;     // 0–30 и 70–100
+input color                ColorFearTransition  = clrDarkGoldenrod; // 30–35 и 65–70
+input color                ColorFearNeutral     = clrSeaGreen;      // 35–65
+
+// совместимость со старыми пресетами (.set): те же слоты, другие имена не ломают Load
+input bool                 ShowProbabilityHUD   = true;   // устар.: синоним ShowFearIndexHUD
+input bool                 ScaleLotByProbability = false; // устар.: синоним ScaleLotBySetupQuality
+input int                  ProbMinToTrade       = 0;      // устар.: синоним SetupQualityMinToTrade
+input int                  ProbHistoryLen       = 24;     // устар.: синоним FearHistoryLen
 input color                ColorProbHigh        = clrSeaGreen;
 input color                ColorProbMid         = clrDarkGoldenrod;
 input color                ColorProbLow         = clrIndianRed;
@@ -251,13 +264,16 @@ input bool                 ShowDecisionZones    = true;   // ЗУ
 input bool                 ShowPullbackZones    = true;   // ПД
 input bool                 ShowCascadeMarks     = false;
 input bool                 ShowReversalMoments  = true;   // РМ: рамка Price Action на свече остановки
+input bool                 ShowGUDLevels        = true;   // ГУД: глобальный уровень дисбаланса (М/W)
 input bool                 ShowZoneFill         = false;  // заливка ЗУ/ПД ВЫКЛ — только контур
 input bool                 ShowFib30            = true;   // тонкая линия «30» как в Sniper-PRO (без заливки)
 input color                ColorFib30           = clrDodgerBlue; // как синяя сетка на эталоне
 input ENUM_SPEED_PRESET    SpeedPreset          = SPEED_CALM; // скальп / спокойный / свинги — для ЛЮБОЙ пары
 input int                  IndicatorSpeed       = 8;      // глубина, если SpeedPreset=CUSTOM (2..60)
 input int                  StructureLookbackBars = 250;    // баров истории для структур
-input double               PD_MinCorrectionPct  = 30.0;   // мин. коррекция ПД, %
+input double               PD_MinCorrectionPct  = 30.0;   // мин. откат от ширины хода, %
+input double               PD_MinImpulseATR     = 1.2;    // мин. ширина продолженного хода в ATR (шум меньше этого — не ход)
+input int                  PD_MinImpulsePoints  = 0;      // доп. пол в пунктах; 0 = только ATR (+пол 20 пунктов)
 input int                  PD_RetestMaxHours    = 6;      // макс. часов до ретеста ПД
 input double               CascadeMaxBreakoutPct = 100.0; // каскад: пробой > этого % от X — отмена
 input double               ZU_HeightATR_Mult    = 0.35;   // высота ЗУ в долях ATR
@@ -368,7 +384,9 @@ string   g_ProfileLogLine = "";
 
 // Sniper runtime state (v2.0)
 int      g_probHistory[];
-int      g_lastProbability = 50;
+int      g_lastProbability = 50; // история HUD: теперь индекс страха 0..100
+int      g_lastFearIndex = 50;
+int      g_lastSetupQuality = 50;
 int      g_sightDirection = 0;   // 1 buy sight, -1 sell sight, 0 none
 double   g_sightHigh = 0.0;
 double   g_sightLow = 0.0;
@@ -411,7 +429,8 @@ enum ENUM_STRUCT_KIND
    SK_ZU = 1,      // зона принятия решения (расширение)
    SK_PD = 2,      // зона отката (продолженное движение)
    SK_CASCADE = 3, // каскад
-   SK_RM = 4       // разворотный момент
+   SK_RM = 4,      // разворотный момент
+   SK_GUD = 5      // глобальный уровень дисбаланса
 };
 
 // 12 именованных паттернов Снайпера (зеркала BUY/SELL через direction)
@@ -468,6 +487,22 @@ struct SStructureZone
 
 SStructureZone g_structZones[];
 int            g_structSeq = 0;
+
+// Безоткатный / продолженный ход (одна сторона, пока откат < 30% диапазона)
+struct SContinuedMove
+{
+   bool     valid;
+   bool     retraced_30; // откат ≥ порога уже случился — можно искать вход за экстремумом
+   int      dir;         // +1 рост, -1 падение
+   double   origin;      // 100% — начало хода
+   double   tip;         // 0%  — экстремум, откуда пошёл откат
+   datetime t_origin;
+   datetime t_tip;
+   double   range;
+};
+
+double MinContinuedMoveRange();
+bool   FindContinuedMove(const MqlRates &rates[], SContinuedMove &m);
 
 // Dual-TF / Balance RSI / alerts runtime
 int      g_hRSI = INVALID_HANDLE;
@@ -694,7 +729,7 @@ string SymbolBaseOf(const string sym)
    string s = sym;
    StringToUpper(s);
    // типовые majors — сначала длинные совпадения
-   string majors[] = {"EURUSD","GBPUSD","USDJPY","USDCHF","EURGBP","AUDUSD","USDCAD","NZDUSD","USDTRY","XAUUSD","XAGUSD"};
+   string majors[] = {"EURUSD","GBPUSD","USDJPY","USDCHF","EURGBP","AUDUSD","USDCAD","NZDUSD","USDTRY","XAUUSD","XAGUSD","BTCUSDT","BTCUSD"};
    for(int i = 0; i < ArraySize(majors); i++)
    {
       if(StringFind(s, majors[i]) == 0)
@@ -729,6 +764,18 @@ string PreferredSymbolBase()
    return "";
 }
 
+bool SymbolMatchesPreferredBase(const string name, const string base)
+{
+   if(SymbolBaseOf(name) == base)
+      return true;
+   string u = name;
+   StringToUpper(u);
+   // Часть брокеров называет золото GOLD, а не XAUUSD.
+   if(base == "XAUUSD" && StringFind(u, "GOLD") == 0)
+      return true;
+   return false;
+}
+
 string FindBrokerSymbolByBase(const string base_in)
 {
    string base = SymbolBaseOf(base_in);
@@ -743,15 +790,15 @@ string FindBrokerSymbolByBase(const string base_in)
    }
 
    // текущий график уже тот же base
-   if(SymbolBaseOf(_Symbol) == base)
+   if(SymbolMatchesPreferredBase(_Symbol, base))
       return _Symbol;
 
-   // поиск среди символов терминала (с суффиксами брокера: EURUSDrfd и т.п.)
+   // поиск среди символов терминала (с суффиксами брокера: EURUSDrfd, XAUUSDm, GOLD)
    int total = SymbolsTotal(false);
    for(int i = 0; i < total; i++)
    {
       string name = SymbolName(i, false);
-      if(SymbolBaseOf(name) == base)
+      if(SymbolMatchesPreferredBase(name, base))
       {
          SymbolSelect(name, true);
          return name;
@@ -977,6 +1024,163 @@ bool GetBufferValue(const int handle, const int shift, double &value)
 
    value = buf[0];
    return true;
+}
+
+double MinContinuedMoveRange()
+{
+   double atr = 0.0;
+   GetBufferValue(g_hATR_Filter, 1, atr);
+   const double floor_pts = 20.0 * PointValue();
+   double by_atr = (atr > 0.0 && PD_MinImpulseATR > 0.0) ? PD_MinImpulseATR * atr : 0.0;
+   double by_pts = (PD_MinImpulsePoints > 0) ? (double)PD_MinImpulsePoints * PointValue() : 0.0;
+   double m = MathMax(floor_pts, MathMax(by_atr, by_pts));
+   if(m <= 0.0)
+      m = floor_pts;
+   return m;
+}
+
+bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
+{
+   m.valid = false;
+   m.retraced_30 = false;
+   m.dir = 0;
+   m.origin = 0.0;
+   m.tip = 0.0;
+   m.t_origin = 0;
+   m.t_tip = 0;
+   m.range = 0.0;
+
+   const int nr = ArraySize(rates);
+   if(nr < 30)
+      return false;
+
+   const double retrace_need = MathMax(0.05, PD_MinCorrectionPct / 100.0);
+   const int look = MathMin(nr, MathMax(50, StructureLookbackBars));
+   const int oldest = look - 1;
+   const double min_range = MinContinuedMoveRange();
+
+   int dir = 0;
+   double origin = 0.0, tip = 0.0;
+   datetime t_origin = 0, t_tip = 0;
+   double run_hi = rates[oldest].high, run_lo = rates[oldest].low;
+   datetime t_run_hi = rates[oldest].time, t_run_lo = rates[oldest].time;
+
+   bool have = false;
+   double show_o = 0.0, show_t = 0.0;
+   datetime show_ot = 0, show_tt = 0;
+   double show_range = 0.0;
+   int show_dir = 0;
+
+   for(int i = oldest - 1; i >= 0; i--)
+   {
+      const double h = rates[i].high;
+      const double l = rates[i].low;
+      const datetime tm = rates[i].time;
+
+      if(dir == 0)
+      {
+         if(h > run_hi) { run_hi = h; t_run_hi = tm; }
+         if(l < run_lo) { run_lo = l; t_run_lo = tm; }
+         if(run_hi - run_lo <= min_range)
+            continue;
+         if(t_run_hi >= t_run_lo)
+         {
+            dir = 1;
+            origin = run_lo; t_origin = t_run_lo;
+            tip = run_hi;    t_tip = t_run_hi;
+         }
+         else
+         {
+            dir = -1;
+            origin = run_hi; t_origin = t_run_hi;
+            tip = run_lo;    t_tip = t_run_lo;
+         }
+         continue;
+      }
+
+      if(dir < 0)
+      {
+         if(l < tip)
+         {
+            tip = l;
+            t_tip = tm;
+            continue;
+         }
+         const double range = origin - tip;
+         if(range <= min_range || (h - tip) < retrace_need * range)
+            continue;
+      }
+      else
+      {
+         if(h > tip)
+         {
+            tip = h;
+            t_tip = tm;
+            continue;
+         }
+         const double range_up = tip - origin;
+         if(range_up <= min_range || (tip - l) < retrace_need * range_up)
+            continue;
+      }
+
+      show_o = origin; show_ot = t_origin;
+      show_t = tip;    show_tt = t_tip;
+      show_range = MathAbs(origin - tip);
+      show_dir = dir;
+      have = true;
+
+      if(dir < 0)
+      {
+         dir = 1;
+         origin = tip; t_origin = t_tip;
+         tip = h;      t_tip = tm;
+      }
+      else
+      {
+         dir = -1;
+         origin = tip; t_origin = t_tip;
+         tip = l;      t_tip = tm;
+      }
+   }
+
+   // Живой ход берём, только если он шире уже подтверждённого. Иначе — зафиксированный импульс после отката 30%.
+   if(dir != 0 && MathAbs(origin - tip) > show_range && MathAbs(origin - tip) > min_range)
+   {
+      m.valid = true;
+      m.retraced_30 = false;
+      m.dir = dir;
+      m.origin = origin;
+      m.tip = tip;
+      m.t_origin = t_origin;
+      m.t_tip = t_tip;
+      m.range = MathAbs(origin - tip);
+      return true;
+   }
+   if(have && show_range > min_range)
+   {
+      m.valid = true;
+      m.retraced_30 = true;
+      m.dir = show_dir;
+      m.origin = show_o;
+      m.tip = show_t;
+      m.t_origin = show_ot;
+      m.t_tip = show_tt;
+      m.range = show_range;
+      return true;
+   }
+   if(dir != 0 && MathAbs(origin - tip) > min_range)
+   {
+      m.valid = true;
+      m.retraced_30 = false;
+      m.dir = dir;
+      m.origin = origin;
+      m.tip = tip;
+      m.t_origin = t_origin;
+      m.t_tip = t_tip;
+      m.range = MathAbs(origin - tip);
+      return true;
+   }
+   return false;
 }
 
 //=========================
@@ -3350,6 +3554,7 @@ int ComputeProbability(const string sig, const int direction, const MqlRates &ba
          if(g_structZones[i].pattern != PAT_NONE) score += 10;
          else if(g_structZones[i].kind == SK_ZU || g_structZones[i].kind == SK_PD) score += 8;
          else if(g_structZones[i].kind == SK_RM) score += 12;
+         else if(g_structZones[i].kind == SK_GUD) score += 14;
          break;
       }
    }
@@ -3431,8 +3636,9 @@ int ComputeProbability(const string sig, const int direction, const MqlRates &ba
 
 void PushProbability(const int value)
 {
+   int hist_len = MathMax(8, MathMax(FearHistoryLen, ProbHistoryLen));
    int n = ArraySize(g_probHistory);
-   if(n < ProbHistoryLen)
+   if(n < hist_len)
    {
       ArrayResize(g_probHistory, n + 1);
       g_probHistory[n] = value;
@@ -3444,6 +3650,7 @@ void PushProbability(const int value)
       g_probHistory[n - 1] = value;
    }
    g_lastProbability = value;
+   g_lastFearIndex = value;
 }
 
 void HudLabelEx(const string name, const int x, const int y,
@@ -3472,15 +3679,85 @@ void HudLabel(const string name, const int x, const int y,
    HudLabelEx(name, x, y, text, clr, font_size, ANCHOR_RIGHT_UPPER, font);
 }
 
-void UpdateProbabilityHUD(const int display_value)
+// Индекс страха/жадности 0..100 (база — RSI). Зоны как в методичке МИР ТРЕЙДИНГА.
+int ComputeFearIndex()
 {
-   if(!ShowProbabilityHUD)
+   if(g_hRSI == INVALID_HANDLE)
+      return g_lastFearIndex;
+   double rsi = 0.0;
+   if(!GetBufferValue(g_hRSI, 0, rsi) && !GetBufferValue(g_hRSI, 1, rsi))
+      return g_lastFearIndex;
+   int v = (int)MathRound(rsi);
+   if(v < 0) v = 0;
+   if(v > 100) v = 100;
+   return v;
+}
+
+color FearIndexColor(const int fear)
+{
+   if(fear <= 30 || fear >= 70)
+      return (ColorFearExtreme != clrNONE ? ColorFearExtreme : ColorProbLow);
+   if(fear <= 35 || fear >= 65)
+      return (ColorFearTransition != clrNONE ? ColorFearTransition : ColorProbMid);
+   return (ColorFearNeutral != clrNONE ? ColorFearNeutral : ColorProbHigh);
+}
+
+// Рекомендуемый R:R по зоне индекса: страх/жадность → 1:1; переход → 1:2; нейтраль → 1:3.
+double FearIndexRewardMult(const int fear)
+{
+   if(fear <= 30 || fear >= 70) return 1.0;
+   if(fear <= 35 || fear >= 65) return 2.0;
+   return 3.0;
+}
+
+string FearIndexZoneName(const int fear)
+{
+   if(fear <= 30) return "страх";
+   if(fear <= 35) return "давление продаж";
+   if(fear < 65)  return "нейтраль";
+   if(fear < 70)  return "давление покупок";
+   return "жадность";
+}
+
+bool FearIndexAllows(const int direction, string &why)
+{
+   why = "";
+   if(!FilterByFearIndex)
+      return true;
+   int fear = ComputeFearIndex();
+   // 0–30: сильный страх после падения — ищем покупки, не продажи
+   if(fear <= 30 && direction < 0)
+   {
+      why = StringFormat("blocked: fear %d (страх) — не SELL", fear);
+      return false;
+   }
+   // 70–100: жадность/перегрев — ищем продажи, не покупки
+   if(fear >= 70 && direction > 0)
+   {
+      why = StringFormat("blocked: fear %d (жадность) — не BUY", fear);
+      return false;
+   }
+   return true;
+}
+
+bool ShowFearHudEnabled()
+{
+   return (ShowFearIndexHUD || ShowProbabilityHUD);
+}
+
+int HistoryLenFear()
+{
+   return MathMax(8, MathMax(FearHistoryLen, ProbHistoryLen));
+}
+
+void UpdateFearIndexHUD(const int display_value)
+{
+   if(!ShowFearHudEnabled())
    {
       DeleteObjectsWithPrefix(Prefix() + "PROB_");
       return;
    }
 
-   // Снести любые старые подписи/бары — они и наползали на число
    if(ObjExists(Prefix() + "PROB_PCT"))    ObjectDelete(0, Prefix() + "PROB_PCT");
    if(ObjExists(Prefix() + "PROB_TITLE"))  ObjectDelete(0, Prefix() + "PROB_TITLE");
    if(ObjExists(Prefix() + "PROB_SPARK"))  ObjectDelete(0, Prefix() + "PROB_SPARK");
@@ -3488,17 +3765,19 @@ void UpdateProbabilityHUD(const int display_value)
       DeleteObjectsWithPrefix(Prefix() + "PROB_BAR");
    if(ObjExists(Prefix() + "PROB_CTX"))    ObjectDelete(0, Prefix() + "PROB_CTX");
 
-   color c = ColorProbMid;
-   if(display_value >= 60) c = ColorProbHigh;
-   else if(display_value < ProbMinToTrade) c = ColorProbLow;
+   color c = FearIndexColor(display_value);
 
-   // ОДНА подпись: «69%». Никакого второго текста рядом/снизу — на Wine/Retina он всегда наползает.
+   // Как на эталоне: одно число без «%» — это индекс страха, не вероятность профита.
    HudLabel(Prefix() + "PROB_NUM", 14, 44,
-            IntegerToString(display_value) + "%", c, 24, "Arial Bold");
+            IntegerToString(display_value), c, 24, "Arial Bold");
 }
 
-// Контекстная вероятность (без сигнала A/B/C): насколько «созрела» зона для входа объёмом.
-// Это НЕ процент прибыльности и НЕ гарантия сделки — это рекомендуемый относительный объём 5..95.
+void UpdateProbabilityHUD(const int display_value)
+{
+   UpdateFearIndexHUD(display_value);
+}
+
+// Зрелость сетапа (внутренняя): для опционального масштаба лота. НЕ индекс страха.
 int ComputeContextProbability()
 {
    int score = 30;
@@ -3506,27 +3785,25 @@ int ComputeContextProbability()
    double atr = 0.0;
    GetBufferValue(g_hATR_Filter, 1, atr);
 
-   // 1) Прицел
    if(g_sightActive)
    {
       score += 12;
       if(PriceInsideSight(bid))
-         score += 18; // цена уже в мишени — сильнее
+         score += 18;
       else if(atr > 0.0)
       {
          double mid = 0.5 * (g_sightHigh + g_sightLow);
          double dist = MathAbs(bid - mid);
          if(dist <= 1.5 * atr)
-            score += 8; // подходим к прицелу
+            score += 8;
       }
    }
 
-   // 2) Близость к зоне ликвидности в сторону прицела
    if(atr > 0.0)
    {
       int want = 0;
-      if(g_sightDirection > 0) want = -1;      // buy → demand
-      else if(g_sightDirection < 0) want = 1;  // sell → supply
+      if(g_sightDirection > 0) want = -1;
+      else if(g_sightDirection < 0) want = 1;
       double zh=0, zl=0, dist=0;
       if(FindNearestLiquidity(want, zh, zl, dist))
       {
@@ -3534,7 +3811,6 @@ int ComputeContextProbability()
          else if(dist <= 1.2 * atr) score += 8;
       }
 
-      // 3) Сессионный экстремум рядом
       double near = 1.0 * atr;
       for(int i = 0; i < ArraySize(g_sessions); i++)
       {
@@ -3547,11 +3823,21 @@ int ComputeContextProbability()
       }
    }
 
-   // 4) Активная зона консолидации
    if(g_zone.active)
       score += 6;
 
-   // 5) Спред
+   // Бонус за близость к ГУД
+   for(int i = 0; i < ArraySize(g_structZones); i++)
+   {
+      if(!g_structZones[i].active || !g_structZones[i].valid) continue;
+      if(g_structZones[i].kind != SK_GUD) continue;
+      if(atr > 0.0 && bid <= g_structZones[i].high + 0.4 * atr && bid >= g_structZones[i].low - 0.4 * atr)
+      {
+         score += 14;
+         break;
+      }
+   }
+
    int spread = CurrentSpreadPoints();
    if(g_MaxSpread_Eff > 0)
    {
@@ -3559,7 +3845,6 @@ int ComputeContextProbability()
       else if(spread > g_MaxSpread_Eff / 2) score -= 6;
    }
 
-   // 6) Мягкий EMA-контекст по направлению прицела
    if(g_sightDirection != 0 && EMA_Period > 0 && g_hEMA != INVALID_HANDLE)
    {
       double ema = 0.0;
@@ -3574,6 +3859,7 @@ int ComputeContextProbability()
 
    if(score < 5) score = 5;
    if(score > 95) score = 95;
+   g_lastSetupQuality = score;
    return score;
 }
 
@@ -3692,127 +3978,19 @@ void DrawFib30Line(const MqlRates &rates[])
    if(ObjExists(zb)) ObjectDelete(0, zb);
    if(ObjExists(fold)) ObjectDelete(0, fold);
 
-   const int nr = ArraySize(rates);
-   if(nr < 30)
+   SContinuedMove mv;
+   if(!FindContinuedMove(rates, mv) || mv.range <= MinContinuedMoveRange())
    {
       if(ObjExists(fn)) ObjectDelete(0, fn);
       return;
    }
 
-   // rates[] — серия: индекс 0 самый свежий. Идём от старых баров к новым.
-   const double retrace_need = 0.30;
-   const int look = MathMin(nr, MathMax(50, StructureLookbackBars));
-   const int oldest = look - 1;
-   const double min_range = PointValue() * 5.0;
+   const double price_100 = mv.origin;
+   const double price_0   = mv.tip;
+   const datetime time_100 = mv.t_origin;
+   const datetime time_0   = mv.t_tip;
 
-   int dir = 0; // -1 безоткатное падение, +1 безоткатный рост
-   double origin = 0.0, tip = 0.0;
-   datetime t_origin = 0, t_tip = 0;
-   double run_hi = rates[oldest].high, run_lo = rates[oldest].low;
-   datetime t_run_hi = rates[oldest].time, t_run_lo = rates[oldest].time;
-
-   bool have = false;
-   double show_o = 0.0, show_t = 0.0;
-   datetime show_ot = 0, show_tt = 0;
-   double show_range = 0.0;
-
-   for(int i = oldest - 1; i >= 0; i--)
-   {
-      const double h = rates[i].high;
-      const double l = rates[i].low;
-      const datetime tm = rates[i].time;
-
-      if(dir == 0)
-      {
-         if(h > run_hi) { run_hi = h; t_run_hi = tm; }
-         if(l < run_lo) { run_lo = l; t_run_lo = tm; }
-         if(run_hi - run_lo <= min_range)
-            continue;
-         if(t_run_hi >= t_run_lo)
-         {
-            dir = 1;
-            origin = run_lo; t_origin = t_run_lo;
-            tip = run_hi;    t_tip = t_run_hi;
-         }
-         else
-         {
-            dir = -1;
-            origin = run_hi; t_origin = t_run_hi;
-            tip = run_lo;    t_tip = t_run_lo;
-         }
-         continue;
-      }
-
-      if(dir < 0)
-      {
-         if(l < tip)
-         {
-            tip = l;
-            t_tip = tm;
-            continue;
-         }
-         const double range = origin - tip;
-         if(range <= min_range || (h - tip) < retrace_need * range)
-            continue;
-      }
-      else
-      {
-         if(h > tip)
-         {
-            tip = h;
-            t_tip = tm;
-            continue;
-         }
-         const double range_up = tip - origin;
-         if(range_up <= min_range || (tip - l) < retrace_need * range_up)
-            continue;
-      }
-
-      // Откат достиг 30% всего диапазона. Фиксируем именно этот безоткатный ход.
-      show_o = origin; show_ot = t_origin;
-      show_t = tip;    show_tt = t_tip;
-      show_range = MathAbs(origin - tip);
-      have = true;
-
-      if(dir < 0)
-      {
-         dir = 1;
-         origin = tip; t_origin = t_tip;
-         tip = h;      t_tip = tm;
-      }
-      else
-      {
-         dir = -1;
-         origin = tip; t_origin = t_tip;
-         tip = l;      t_tip = tm;
-      }
-   }
-
-   double price_100 = 0.0, price_0 = 0.0;
-   datetime time_100 = 0, time_0 = 0;
-   if(dir != 0 && MathAbs(origin - tip) > show_range)
-   {
-      // Безоткатный ход ещё идёт — сетка по нему, 30% впереди по ходу.
-      price_100 = origin; time_100 = t_origin;
-      price_0   = tip;    time_0   = t_tip;
-   }
-   else if(have)
-   {
-      price_100 = show_o; time_100 = show_ot;
-      price_0   = show_t; time_0   = show_tt;
-   }
-   else if(dir != 0)
-   {
-      price_100 = origin; time_100 = t_origin;
-      price_0   = tip;    time_0   = t_tip;
-   }
-   else
-   {
-      if(ObjExists(fn)) ObjectDelete(0, fn);
-      return;
-   }
-
-   if(MathAbs(price_100 - price_0) <= PointValue() * 5.0 || time_100 == time_0)
+   if(MathAbs(price_100 - price_0) <= MinContinuedMoveRange() || time_100 == time_0)
    {
       if(ObjExists(fn)) ObjectDelete(0, fn);
       return;
@@ -3821,9 +3999,14 @@ void DrawFib30Line(const MqlRates &rates[])
    // «30» всегда со стороны отката: от 0% к 100%.
    // У OBJ_FIBO значение 0 лежит на нижней цене, 1 — на верхней,
    // поэтому на росте уровень объекта = 0.70, чтобы линия была у вершины.
-   const double price_30 = price_0 + 0.30 * (price_100 - price_0);
+   const double price_30 = price_0 + (PD_MinCorrectionPct / 100.0) * (price_100 - price_0);
    const double price_bot = MathMin(price_0, price_100);
    const double price_top = MathMax(price_0, price_100);
+   if(price_top - price_bot <= PointValue())
+   {
+      if(ObjExists(fn)) ObjectDelete(0, fn);
+      return;
+   }
    const double level = (price_30 - price_bot) / (price_top - price_bot);
 
    datetime time_end = time_0;
@@ -3842,7 +4025,7 @@ void DrawFib30Line(const MqlRates &rates[])
       ObjectMove(0, fn, 1, time_start, price_start);
    }
 
-   ObjectSetInteger(0, fn, OBJPROP_COLOR, clrNONE); // сам «треугольник» не красим
+   ObjectSetInteger(0, fn, OBJPROP_COLOR, clrNONE);
    ObjectSetInteger(0, fn, OBJPROP_STYLE, STYLE_DOT);
    ObjectSetInteger(0, fn, OBJPROP_WIDTH, 1);
    ObjectSetInteger(0, fn, OBJPROP_RAY_RIGHT, false);
@@ -3852,7 +4035,6 @@ void DrawFib30Line(const MqlRates &rates[])
    ObjectSetInteger(0, fn, OBJPROP_HIDDEN, true);
    ObjectSetInteger(0, fn, OBJPROP_ZORDER, 50);
 
-   // Только 30%
    ObjectSetInteger(0, fn, OBJPROP_LEVELS, 1);
    ObjectSetDouble(0, fn, OBJPROP_LEVELVALUE, 0, level);
    ObjectSetString(0, fn, OBJPROP_LEVELTEXT, 0, "30");
@@ -3872,6 +4054,7 @@ void DrawStructureZone(const SStructureZone &z)
    if(z.kind == SK_PD && !ShowPullbackZones) return;
    if(z.kind == SK_CASCADE && !ShowCascadeMarks) return;
    if(z.kind == SK_RM && !ShowReversalMoments) return;
+   if(z.kind == SK_GUD && !ShowGUDLevels) return;
    double ink = 1.0;
    if(!MarkInk(z.t1, ink))
       return;
@@ -3894,6 +4077,27 @@ void DrawStructureZone(const SStructureZone &z)
       ObjectSetInteger(0, base + "_OL", OBJPROP_BACK, false);
       ObjectSetInteger(0, base + "_OL", OBJPROP_ZORDER, 20);
       ObjectSetInteger(0, base + "_OL", OBJPROP_SELECTABLE, false);
+      return;
+   }
+
+   // ГУД: тонкая горизонтальная зона дисбаланса (М/W)
+   if(z.kind == SK_GUD)
+   {
+      const color gc = InkColor((z.direction > 0) ? ColorRM_Buy : ColorRM_Sell, ink);
+      ObjectCreate(0, base + "_OL", OBJ_RECTANGLE, 0, z.t1, z.high, z.t2, z.low);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_COLOR, gc);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_STYLE, STYLE_SOLID);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_WIDTH, 1);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_FILL, false);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_BACK, true);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_ZORDER, 15);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_SELECTABLE, false);
+      if(ShowStructureLabels && ink >= 0.45)
+      {
+         DrawText(base + "_LBL", z.t1, z.high + 3 * PointValue(),
+                  (StringLen(z.label) > 0 ? z.label : "ГУД"), gc, ANCHOR_LEFT_LOWER);
+         ObjectSetInteger(0, base + "_LBL", OBJPROP_FONTSIZE, 7);
+      }
       return;
    }
 
@@ -4105,69 +4309,46 @@ bool RangeHadConsolidation(const MqlRates &rates[], const datetime t_from, const
 // --- PAT 01: ПД тип 1 ---
 void DetectPattern_PD_T1(const MqlRates &rates[], const SPivot &swings[], const string tf_tag)
 {
+   // ПД = продолженный безоткатный ход → откат ≥30% ширины → зона входа ЗА экстремумом хода
+   // (на скрине: ход вверх, откат 30%+, поиск входа ВЫШЕ максимума).
    if(!ShowPullbackZones && !ShowAll12Patterns) return;
-   int n = ArraySize(swings);
-   if(n < 3) return;
+   SContinuedMove mv;
+   if(!FindContinuedMove(rates, mv) || !mv.valid || !mv.retraced_30)
+      return;
+   if(mv.range < MinContinuedMoveRange())
+      return;
+
    int sec = PeriodSeconds(Timeframe);
    datetime now_t = rates[0].time;
    double atr = 0.0;
    GetBufferValue(g_hATR_Filter, 1, atr);
 
-   int best_buy = -1, best_sell = -1;
-   double best_buy_pct = 0, best_sell_pct = 0;
-   double z_hi_b=0,z_lo_b=0,z_hi_s=0,z_lo_s=0,imp_b=0,imp_s=0;
-   double imp_start_b=0,imp_end_b=0,imp_start_s=0,imp_end_s=0;
-   datetime t1_b=0,t2_b=0,t1_s=0,t2_s=0;
+   datetime deadline = mv.t_tip + (datetime)(MathMax(1, PD_RetestMaxHours) * 3600);
+   if(now_t > deadline)
+      return;
 
-   for(int i = 2; i < n; i++)
+   double zh = MathMax(PointValue() * 8.0, (atr > 0.0 ? MathMax(0.50, ZU_HeightATR_Mult) * atr : mv.range * 0.15));
+   datetime t2a = now_t + (datetime)(sec * 30);
+   datetime t2b = deadline + (datetime)(sec * 10);
+   datetime t2 = (t2a < t2b ? t2a : t2b);
+   double corr_pct = PD_MinCorrectionPct;
+
+   if(mv.dir > 0)
    {
-      SPivot a = swings[i - 2];
-      SPivot b = swings[i - 1];
-      SPivot c = swings[i];
-      double impulse = MathAbs(b.p - a.p);
-      if(impulse <= 0.0) continue;
-      if(atr > 0.0 && impulse < 0.8 * atr) continue;
-      double corr_pct = 100.0 * MathAbs(c.p - b.p) / impulse;
-      if(corr_pct < PD_MinCorrectionPct) continue;
-
-      datetime deadline = b.t + (datetime)(MathMax(1, PD_RetestMaxHours) * 3600);
-      if(now_t > deadline) continue;
-      datetime t2a = now_t + (datetime)(sec * 30);
-      datetime t2b = deadline + (datetime)(sec * 10);
-      datetime t2 = (t2a < t2b ? t2a : t2b);
-      // зона входа — компактная у экстремума; «30» рисуется отдельно линией Fib
-      double zh = MathMax(PointValue() * 8.0, (atr > 0 ? ZU_HeightATR_Mult * atr : impulse * 0.15));
-
-      if(a.type == 1 && b.type == -1 && c.type == 1)
-      {
-         if(corr_pct >= best_buy_pct)
-         {
-            best_buy = i; best_buy_pct = corr_pct; imp_b = impulse;
-            z_hi_b = b.p + zh; z_lo_b = b.p - zh * 0.25;
-            imp_start_b = a.p; imp_end_b = b.p;
-            t1_b = b.t; t2_b = t2;
-         }
-      }
-      else if(a.type == -1 && b.type == 1 && c.type == -1)
-      {
-         if(corr_pct >= best_sell_pct)
-         {
-            best_sell = i; best_sell_pct = corr_pct; imp_s = impulse;
-            z_hi_s = b.p + zh * 0.25; z_lo_s = b.p - zh;
-            imp_start_s = a.p; imp_end_s = b.p;
-            t1_s = b.t; t2_s = t2;
-         }
-      }
+      // Ход вверх: зона поиска входа ВЫШЕ максимума (tip)
+      PushStructureZoneEx(SK_PD, PAT_PD_T1, 1, mv.t_tip, t2,
+                          mv.tip + zh, mv.tip, mv.range, corr_pct,
+                          StringFormat("%s BUY выше макс", PatternName(PAT_PD_T1)), true, tf_tag,
+                          mv.origin, mv.tip);
    }
-
-   if(best_buy >= 0)
-      PushStructureZoneEx(SK_PD, PAT_PD_T1, 1, t1_b, t2_b, z_hi_b, z_lo_b, imp_b, best_buy_pct,
-         StringFormat("%s BUY откат", PatternName(PAT_PD_T1)), true, tf_tag,
-         imp_start_b, imp_end_b);
-   if(best_sell >= 0)
-      PushStructureZoneEx(SK_PD, PAT_PD_T1, -1, t1_s, t2_s, z_hi_s, z_lo_s, imp_s, best_sell_pct,
-         StringFormat("%s SELL откат", PatternName(PAT_PD_T1)), true, tf_tag,
-         imp_start_s, imp_end_s);
+   else
+   {
+      // Ход вниз: зона поиска входа НИЖЕ минимума (tip)
+      PushStructureZoneEx(SK_PD, PAT_PD_T1, -1, mv.t_tip, t2,
+                          mv.tip, mv.tip - zh, mv.range, corr_pct,
+                          StringFormat("%s SELL ниже мин", PatternName(PAT_PD_T1)), true, tf_tag,
+                          mv.origin, mv.tip);
+   }
 }
 
 // --- PAT 02: ПД тип 2 (синий уровень, ≤6ч, без диапазонов, только 1-е ПД) ---
@@ -4640,6 +4821,85 @@ bool BalanceRSIAllows(const int direction)
    return true;
 }
 
+void DetectGUDLevels(const MqlRates &rates[], const SPivot &swings[], const string tf_tag)
+{
+   // ГУД по гайду: опора → ложный пробой / М(W) → уровень дисбаланса на минимуме M / максимуме W.
+   if(!ShowGUDLevels) return;
+   const int n = ArraySize(swings);
+   if(n < 5) return;
+
+   double atr = 0.0;
+   GetBufferValue(g_hATR_Filter, 1, atr);
+   const double min_move = MathMax(50.0 * PointValue(), (atr > 0.0 ? 0.8 * atr : 50.0 * PointValue()));
+   const double tol = MathMax(10.0 * PointValue(), (atr > 0.0 ? 0.25 * atr : 10.0 * PointValue()));
+   const int sec = PeriodSeconds(Timeframe);
+   const datetime now_t = rates[0].time;
+   const double zh = MathMax(PointValue() * 5.0, (atr > 0.0 ? 0.12 * atr : PointValue() * 5.0));
+
+   // Ищем самые свежие конструкции справа налево
+   for(int i = n - 1; i >= 4; i--)
+   {
+      // SELL: high - low - high - low(M trough≈support) - high  →  GUD на trough, dir=-1
+      // упрощённо по последним 5 свингам с чередованием
+      SPivot p0 = swings[i - 4];
+      SPivot p1 = swings[i - 3];
+      SPivot p2 = swings[i - 2];
+      SPivot p3 = swings[i - 1];
+      SPivot p4 = swings[i];
+
+      // М наверху: H L H L H, где p3.low ≈ p0.high (опорный сегмент)
+      if(p0.type > 0 && p1.type < 0 && p2.type > 0 && p3.type < 0 && p4.type > 0)
+      {
+         double support_high = p0.p;
+         double move = p0.p - p1.p;
+         if(move < min_move) continue;
+         // минимум M (p3) около максимума опоры
+         if(MathAbs(p3.p - support_high) > tol) continue;
+         if(p2.p < support_high + 0.5 * min_move) continue; // М должна быть выше опоры
+
+         double gud = p3.p;
+         // уже пробит вниз?
+         bool broken = false;
+         for(int k = 0; k < ArraySize(rates); k++)
+         {
+            if(rates[k].time <= p4.t) break;
+            if(rates[k].close < gud - 0.1 * (atr > 0 ? atr : PointValue() * 20))
+            { broken = true; break; }
+         }
+         datetime t1 = p3.t;
+         datetime t2 = now_t + (datetime)(sec * 30);
+         string lab = broken ? "ГУД SELL (ретест)" : "ГУД SELL";
+         PushStructureZoneEx(SK_GUD, PAT_NONE, -1, t1, t2,
+                             gud + zh * 0.5, gud - zh * 0.5, move, 0.0, lab, true, tf_tag);
+         break;
+      }
+
+      // W внизу: L H L H L → GUD на peak (p3), dir=+1
+      if(p0.type < 0 && p1.type > 0 && p2.type < 0 && p3.type > 0 && p4.type < 0)
+      {
+         double support_low = p0.p;
+         double move = p1.p - p0.p;
+         if(move < min_move) continue;
+         if(MathAbs(p3.p - support_low) > tol) continue;
+
+         double gud = p3.p;
+         bool broken = false;
+         for(int k = 0; k < ArraySize(rates); k++)
+         {
+            if(rates[k].time <= p4.t) break;
+            if(rates[k].close > gud + 0.1 * (atr > 0 ? atr : PointValue() * 20))
+            { broken = true; break; }
+         }
+         datetime t1 = p3.t;
+         datetime t2 = now_t + (datetime)(sec * 30);
+         string lab = broken ? "ГУД BUY (ретест)" : "ГУД BUY";
+         PushStructureZoneEx(SK_GUD, PAT_NONE, 1, t1, t2,
+                             gud + zh * 0.5, gud - zh * 0.5, move, 0.0, lab, true, tf_tag);
+         break;
+      }
+   }
+}
+
 void RunPatternEngineOnRates(const MqlRates &rates[], const string tf_tag, const int depth)
 {
    SPivot swings[];
@@ -4652,6 +4912,7 @@ void RunPatternEngineOnRates(const MqlRates &rates[], const string tf_tag, const
    DetectPattern_PD_T2(rates, swings, tf_tag);
    DetectPattern_Expansions(rates, swings, tf_tag);
    DetectPattern_Cascades(rates, swings, tf_tag);
+   DetectGUDLevels(rates, swings, tf_tag);
    DetectReversalMoments(rates, tf_tag);
 }
 
@@ -4750,7 +5011,7 @@ void UpdateSniperStructures(const MqlRates &rates[])
    UpdateBoundariesChannel(rates);
    UpdateBalanceRSIPanel();
 
-   if(!ShowDecisionZones && !ShowPullbackZones && !ShowCascadeMarks && !ShowReversalMoments && !ShowAll12Patterns)
+   if(!ShowDecisionZones && !ShowPullbackZones && !ShowCascadeMarks && !ShowReversalMoments && !ShowAll12Patterns && !ShowGUDLevels)
    {
       if(UseVirtualTF) UpdateDualTFStructures();
       return;
@@ -4781,26 +5042,28 @@ void UpdateSniperStructures(const MqlRates &rates[])
 
 void ApplyProbabilityHUD(const bool push_history)
 {
-   int idle = ComputeContextProbability();
+   int fear = ComputeFearIndex();
+   ComputeContextProbability(); // обновляет g_lastSetupQuality для опционального лота
    if(push_history)
    {
-      if(MathAbs(idle - g_lastProbability) >= 2 || ArraySize(g_probHistory) == 0)
-         PushProbability(idle);
+      if(MathAbs(fear - g_lastFearIndex) >= 1 || ArraySize(g_probHistory) == 0)
+         PushProbability(fear);
       else
-         g_lastProbability = idle;
+         g_lastFearIndex = fear;
    }
    else
    {
-      g_lastProbability = idle;
+      g_lastFearIndex = fear;
+      g_lastProbability = fear;
       static int s_live_push_counter = 0;
       s_live_push_counter++;
       if(s_live_push_counter >= 5)
       {
          s_live_push_counter = 0;
-         PushProbability(idle);
+         PushProbability(fear);
       }
    }
-   UpdateProbabilityHUD(g_lastProbability);
+   UpdateFearIndexHUD(g_lastFearIndex);
 }
 
 // Закрытие бара: можно сменить сторону прицела
@@ -4845,25 +5108,39 @@ void RefreshContextLive()
    ApplyProbabilityHUD(false);
 }
 
-bool PassProbabilityGate(const int prob, string &why)
+bool PassProbabilityGate(const int setup_quality, string &why)
 {
    why = "";
-   if(ProbMinToTrade <= 0)
+   int min_q = MathMax(SetupQualityMinToTrade, ProbMinToTrade);
+   if(min_q <= 0)
       return true;
-   if(prob < ProbMinToTrade)
+   if(setup_quality < min_q)
    {
-      why = StringFormat("blocked: prob %d < %d", prob, ProbMinToTrade);
+      why = StringFormat("blocked: setup %d < %d", setup_quality, min_q);
       return false;
    }
    return true;
 }
 
-double ApplyProbabilityToVolume(const double volume, const int prob)
+double ApplyProbabilityToVolume(const double volume, const int setup_quality)
 {
-   if(!ScaleLotByProbability)
+   if(!(ScaleLotBySetupQuality || ScaleLotByProbability))
       return volume;
-   double scaled = volume * (MathMax(5, prob) / 100.0);
+   double scaled = volume * (MathMax(5, setup_quality) / 100.0);
    return ClampVolume(scaled);
+}
+
+int EffectiveSafeStep1Points(const double entry, const double sl)
+{
+   if(!UseSafeRule)
+      return PC_Step1;
+   double p = PointValue();
+   if(p <= 0.0)
+      return PC_Step1;
+   int one_r = (int)MathRound(MathAbs(entry - sl) / p);
+   if(one_r < 1)
+      return PC_Step1;
+   return one_r;
 }
 
 bool PassBreakoutQuality(const MqlRates &bar, string &why)
@@ -4950,8 +5227,16 @@ void BuildSLTP(const int direction, const double entry, const double zone_high, 
       sl = (direction > 0) ? (zone_low - SL_Offset * p) : (zone_high + SL_Offset * p);
    }
 
-   // TP
-   if(TP_Mode == TP_FIXED)
+   // TP: по методичке индекс страха задаёт цель 1:1 / 1:2 / 1:3 от стопа
+   if(AutoTPByFearIndex && TP_Mode == TP_FIXED)
+   {
+      double rr = FearIndexRewardMult(ComputeFearIndex());
+      double sl_dist = MathAbs(entry - sl);
+      if(sl_dist <= 0.0)
+         sl_dist = SL_Points * p;
+      tp = (direction > 0) ? (entry + rr * sl_dist) : (entry - rr * sl_dist);
+   }
+   else if(TP_Mode == TP_FIXED)
    {
       tp = (direction > 0) ? (entry + TP_Points * p) : (entry - TP_Points * p);
    }
@@ -4982,15 +5267,19 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
    bool session_ok = PassServerSession();
    bool rr_ok = PassMinRewardToRisk(direction, entry, sl, tp);
 
-   // v2.0 Sniper confluence: probability + optional sight gate
-   int prob = ComputeProbability(sig, direction, signal_bar);
-   PushProbability(prob);
-   UpdateProbabilityHUD(prob);
+   // Индекс страха на HUD; зрелость сетапа — только для опционального лота/гейта
+   int fear = ComputeFearIndex();
+   int setup_q = ComputeProbability(sig, direction, signal_bar);
+   g_lastSetupQuality = setup_q;
+   PushProbability(fear);
+   UpdateFearIndexHUD(fear);
 
    string sight_why = "";
    bool sight_ok = PassSightFilter(direction, sight_why);
    string prob_why = "";
-   bool prob_ok = PassProbabilityGate(prob, prob_why);
+   bool prob_ok = PassProbabilityGate(setup_q, prob_why);
+   string fear_why = "";
+   bool fear_ok = FearIndexAllows(direction, fear_why);
 
    string breakout_why = "";
    bool breakout_ok = true;
@@ -5088,6 +5377,12 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
          can_enter = false;
          Log("Entry blocked: " + prob_why);
       }
+      else if(!fear_ok)
+      {
+         status = fear_why;
+         can_enter = false;
+         Log("Entry blocked: " + fear_why);
+      }
       else if(!rsi_ok)
       {
          status = "blocked: " + rsi_why;
@@ -5112,9 +5407,9 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
    }
 
    if(status == "" && TradeEnabled)
-      status = StringFormat("P=%d", prob);
-   else if(status != "" && StringFind(status, "P=") < 0)
-      status = status + StringFormat(" | P=%d", prob);
+      status = StringFormat("Fear=%d %s RR=1:%.0f", fear, FearIndexZoneName(fear), FearIndexRewardMult(fear));
+   else if(status != "" && StringFind(status, "Fear=") < 0)
+      status = status + StringFormat(" | Fear=%d", fear);
 
    if(pattern_name != "" && StringFind(status, pattern_name) < 0)
       status = (status == "" ? pattern_name : (pattern_name + " | " + status));
@@ -5183,9 +5478,9 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
 
    // Sniper probability scales recommended relative volume (percent HUD).
    double vol_before = volume;
-   volume = ApplyProbabilityToVolume(volume, prob);
-   if(ScaleLotByProbability && volume != vol_before)
-      Log(StringFormat("Probability volume scale: P=%d  %.2f -> %.2f", prob, vol_before, volume));
+   volume = ApplyProbabilityToVolume(volume, setup_q);
+   if((ScaleLotBySetupQuality || ScaleLotByProbability) && volume != vol_before)
+      Log(StringFormat("Setup volume scale: Q=%d  %.2f -> %.2f | Fear=%d", setup_q, vol_before, volume, fear));
 
    if(volume <= 0.0)
    {
@@ -5194,12 +5489,13 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
    }
 
    ulong deal = 0;
-   string comment = CommentPrefix + " " + sig + " P" + IntegerToString(prob);
+   string comment = CommentPrefix + " " + sig + " F" + IntegerToString(fear);
    if(SendDeal(direction, volume, sl, tp, comment, deal))
    {
       trades_done++;
       MarkTradeInBar(signal_bar.time);
-      Log(StringFormat("Trade opened %s vol=%.2f deal=%I64u P=%d", (direction > 0 ? "BUY" : "SELL"), volume, deal, prob));
+      Log(StringFormat("Trade opened %s vol=%.2f deal=%I64u Fear=%d RR=1:%.0f",
+                       (direction > 0 ? "BUY" : "SELL"), volume, deal, fear, FearIndexRewardMult(fear)));
 
       // Стрелочный алерт уже отправлен выше; здесь только лог сделки
       Log(StringFormat("Deal OK %s", msg));
@@ -5563,6 +5859,17 @@ void ManagePositions()
       else
          profit_points = (open_price - cur_price) / point;
 
+      // Правило сейфа: первая фиксация, когда профит = величине стопа (1R)
+      int safe_pc1 = EffectiveSafeStep1Points(open_price, (sl > 0.0 ? sl : open_price));
+      if(UseSafeRule && sl <= 0.0)
+         safe_pc1 = PC_Step1;
+      else if(UseSafeRule && sl > 0.0)
+      {
+         // 1R от фактического стопа позиции
+         safe_pc1 = (int)MathRound(MathAbs(open_price - sl) / point);
+         if(safe_pc1 < 1) safe_pc1 = PC_Step1;
+      }
+
       // Breakeven (v1.11): BE only after PartialClose step1 is completed, then after BE_Trigger additional points.
       // If PartialClose_On=false, classic BE logic is used (profit_points >= BE_Trigger).
       if(UseBE)
@@ -5573,7 +5880,7 @@ void ManagePositions()
             int pc_idx_be = FindPCIndex(ticket);
             if(pc_idx_be >= 0 && (g_pc_states[pc_idx_be].flags & 1) != 0)
             {
-               if(profit_points >= PC_Step1 + BE_Trigger)
+               if(profit_points >= safe_pc1 + BE_Trigger)
                   be_allowed = true;
             }
          }
@@ -5667,8 +5974,8 @@ void ManagePositions()
             double vmin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
             double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
-            // step1
-            if(!(flags & 1) && profit_points >= PC_Step1)
+            // step1 — правило сейфа: половина на расстоянии 1R
+            if(!(flags & 1) && profit_points >= safe_pc1)
             {
                double to_close = init_vol * PC_Vol1;
                to_close = MathMin(to_close, volume - vmin);
@@ -6000,16 +6307,20 @@ int OnInit()
    g_hATR_Filter = iATR(_Symbol, Timeframe, ATR_Period);
    g_hATR_Zone   = iATR(_Symbol, Timeframe, CZ_ATR_Period);
    g_hRSI = INVALID_HANDLE;
-   if(ShowBalanceRSI || FilterByBalanceRSI)
-      g_hRSI = iRSI(_Symbol, Timeframe, BalanceRSI_Period, PRICE_CLOSE);
+   // RSI — база индекса страха; при панели Balance RSI можно взять её период
+   int rsi_period = MathMax(2, FearIndexPeriod);
+   if((ShowBalanceRSI || FilterByBalanceRSI) && !(ShowFearHudEnabled() || FilterByFearIndex || AutoTPByFearIndex))
+      rsi_period = MathMax(2, BalanceRSI_Period);
+   if(ShowFearHudEnabled() || ShowBalanceRSI || FilterByBalanceRSI || FilterByFearIndex || AutoTPByFearIndex)
+      g_hRSI = iRSI(_Symbol, Timeframe, rsi_period, PRICE_CLOSE);
 
    if(g_hATR_Filter == INVALID_HANDLE || g_hATR_Zone == INVALID_HANDLE)
    {
       Log("Failed to create ATR handles");
       return INIT_FAILED;
    }
-   if((ShowBalanceRSI || FilterByBalanceRSI) && g_hRSI == INVALID_HANDLE)
-      Log("WARNING: Balance RSI handle failed — панель/фильтр отключены до перезапуска");
+   if((ShowFearHudEnabled() || ShowBalanceRSI || FilterByBalanceRSI || FilterByFearIndex) && g_hRSI == INVALID_HANDLE)
+      Log("WARNING: RSI handle failed — индекс страха/фильтр недоступны до перезапуска");
 
    g_intrabarTimerSet = false;
    g_contextTimerOnly = false;
