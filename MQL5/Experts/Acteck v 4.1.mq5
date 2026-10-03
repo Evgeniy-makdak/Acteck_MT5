@@ -167,6 +167,9 @@ input bool                 ShowSwingLine        = false; // UI: меньше л�
 input bool                 ShowZones            = true;
 input bool                 ShowEntryMarker      = true;
 input bool                 KeepSignalHistory    = false; // UI: не копить старые маркеры
+input bool                 FadeOldMarkings      = true;  // старая разметка бледнеет и исчезает
+input int                  MarkFadeAfterHours   = 18;    // после этого контур бледнеет
+input int                  MarkHideAfterHours   = 48;    // старше — скрыть (позавчера)
 input bool                 ShowArrows           = true;
 input ENUM_ALERTS_MODE     AlertsMode           = ALERTS_ONSCREEN;
 
@@ -247,7 +250,7 @@ input group "=== Sniper: Structures (ЗУ / ПД / Каскад / РМ) ==="
 input bool                 ShowDecisionZones    = true;   // ЗУ
 input bool                 ShowPullbackZones    = true;   // ПД
 input bool                 ShowCascadeMarks     = false;
-input bool                 ShowReversalMoments  = false;  // РМ по умолч. выкл. (меньше шума)
+input bool                 ShowReversalMoments  = true;   // РМ: рамка Price Action на свече остановки
 input bool                 ShowZoneFill         = false;  // заливка ЗУ/ПД ВЫКЛ — только контур
 input bool                 ShowFib30            = true;   // тонкая линия «30» как в Sniper-PRO (без заливки)
 input color                ColorFib30           = clrDodgerBlue; // как синяя сетка на эталоне
@@ -265,8 +268,8 @@ input int                  MaxStructureZones    = 4;
 input color                ColorZU_Buy          = clrPaleTurquoise;
 input color                ColorZU_Sell         = clrBurlyWood;
 input color                ColorPD_Zone         = clrPowderBlue;
-input color                ColorRM_Buy          = clrMediumPurple;
-input color                ColorRM_Sell         = clrSaddleBrown;
+input color                ColorRM_Buy          = clrDodgerBlue; // синий — покупка
+input color                ColorRM_Sell         = clrRed;        // красный — продажа
 
 input group "=== Sniper: Frankfurt session ==="
 input bool                 ShowFrankfurt        = true;
@@ -590,6 +593,39 @@ color ToARGB(const color c, const int alpha)
    uint g = ((uint)c >> 8) & 0xFF;
    uint b = ((uint)c >> 16) & 0xFF;
    return (color)((a << 24) | (b << 16) | (g << 8) | r);
+}
+
+// ink: 1 = свежая разметка, ~0.15 = едва заметный контур. false = уже не рисовать.
+bool MarkInk(const datetime born, double &ink)
+{
+   ink = 1.0;
+   if(!FadeOldMarkings || born <= 0)
+      return true;
+   datetime now = TimeCurrent();
+   if(now <= born)
+      return true;
+   double hours = (double)(now - born) / 3600.0;
+   if(MarkHideAfterHours > 0 && hours >= (double)MarkHideAfterHours)
+      return false;
+   if(MarkFadeAfterHours > 0 && hours > (double)MarkFadeAfterHours)
+   {
+      int span_h = MarkHideAfterHours - MarkFadeAfterHours;
+      if(span_h < 1) span_h = 24;
+      double t = (hours - (double)MarkFadeAfterHours) / (double)span_h;
+      if(t < 0.0) t = 0.0;
+      if(t > 1.0) t = 1.0;
+      ink = 1.0 - 0.85 * t;
+   }
+   return true;
+}
+
+color InkColor(const color c, const double ink)
+{
+   if(ink >= 0.98)
+      return c;
+   int a = (int)(255.0 * ink);
+   if(a < 22) a = 22;
+   return ToARGB(c, a);
 }
 
 // Spread in points
@@ -1844,15 +1880,34 @@ void DrawDayLevels(const datetime now_time)
          string n1 = Prefix() + "HOD_PREV";
          string n2 = Prefix() + "LOD_PREV";
          string n3 = Prefix() + "BAL_PREV";
-
-         DrawHLineSegment(n1, prev_start, t2, ph, ColorHOD, STYLE_DOT, 1, "Макс вчера");
-         DrawHLineSegment(n2, prev_start, t2, pl, ColorLOD, STYLE_DOT, 1, "Мин вчера");
-         DrawHLineSegment(n3, prev_start, t2, pbal, ColorBalance, STYLE_DOT, 1, "Баланс вчера");
-
-         // visible labels near the right edge
-         DrawText(Prefix() + "LBL_HOD_PREV", lbl_t, ph + 3*PointValue(), "Макс вчера", ColorHOD, ANCHOR_LEFT_LOWER);
-         DrawText(Prefix() + "LBL_LOD_PREV", lbl_t, pl - 3*PointValue(), "Мин вчера", ColorLOD, ANCHOR_LEFT_UPPER);
-         DrawText(Prefix() + "LBL_BAL_PREV", lbl_t, pbal + 3*PointValue(), "Баланс вчера", ColorBalance, ANCHOR_LEFT_LOWER);
+         double ink = 1.0;
+         if(!MarkInk(prev_start, ink))
+         {
+            if(ObjExists(n1)) ObjectDelete(0, n1);
+            if(ObjExists(n2)) ObjectDelete(0, n2);
+            if(ObjExists(n3)) ObjectDelete(0, n3);
+            if(ObjExists(Prefix() + "LBL_HOD_PREV")) ObjectDelete(0, Prefix() + "LBL_HOD_PREV");
+            if(ObjExists(Prefix() + "LBL_LOD_PREV")) ObjectDelete(0, Prefix() + "LBL_LOD_PREV");
+            if(ObjExists(Prefix() + "LBL_BAL_PREV")) ObjectDelete(0, Prefix() + "LBL_BAL_PREV");
+         }
+         else
+         {
+            DrawHLineSegment(n1, prev_start, t2, ph, InkColor(ColorHOD, ink), STYLE_DOT, 1, "");
+            DrawHLineSegment(n2, prev_start, t2, pl, InkColor(ColorLOD, ink), STYLE_DOT, 1, "");
+            DrawHLineSegment(n3, prev_start, t2, pbal, InkColor(ColorBalance, ink), STYLE_DOT, 1, "");
+            if(ink >= 0.45)
+            {
+               DrawText(Prefix() + "LBL_HOD_PREV", lbl_t, ph + 3*PointValue(), "Макс вчера", InkColor(ColorHOD, ink), ANCHOR_LEFT_LOWER);
+               DrawText(Prefix() + "LBL_LOD_PREV", lbl_t, pl - 3*PointValue(), "Мин вчера", InkColor(ColorLOD, ink), ANCHOR_LEFT_UPPER);
+               DrawText(Prefix() + "LBL_BAL_PREV", lbl_t, pbal + 3*PointValue(), "Баланс вчера", InkColor(ColorBalance, ink), ANCHOR_LEFT_LOWER);
+            }
+            else
+            {
+               if(ObjExists(Prefix() + "LBL_HOD_PREV")) ObjectDelete(0, Prefix() + "LBL_HOD_PREV");
+               if(ObjExists(Prefix() + "LBL_LOD_PREV")) ObjectDelete(0, Prefix() + "LBL_LOD_PREV");
+               if(ObjExists(Prefix() + "LBL_BAL_PREV")) ObjectDelete(0, Prefix() + "LBL_BAL_PREV");
+            }
+         }
       }
    }
 }
@@ -1911,8 +1966,16 @@ void DrawZoneObject(const SConsolidationZone &z, const bool broken, const dateti
    if(broken)
       t2 = right_time; // end at breakout time
 
+   double ink = 1.0;
+   if(broken && !MarkInk(z.start, ink))
+   {
+      if(ObjExists(name)) ObjectDelete(0, name);
+      string rn_old = Prefix() + "CZ_REACT_" + IntegerToString(z.id);
+      if(ObjExists(rn_old)) ObjectDelete(0, rn_old);
+      return;
+   }
    color clr = broken ? ColorZoneBroken : ColorZoneActive;
-   color fill = ToARGB(clr, 40);
+   color fill = ToARGB(clr, (int)(40.0 * (broken ? ink : 1.0)));
 
    DrawRect(name, t1, z.high, t2, z.low, fill, true, true);
 
@@ -2311,10 +2374,13 @@ void UpdateSwingLine(const MqlRates &rates[])
    for(int i = 0; i < piv_n - 1; i++)
    {
       string name = pfx + IntegerToString(i);
+      double ink = 1.0;
+      if(!MarkInk(pivots[i + 1].t, ink))
+         continue;
       ObjectCreate(0, name, OBJ_TREND, 0, pivots[i].t, pivots[i].p, pivots[i + 1].t, pivots[i + 1].p);
       ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, name, OBJPROP_RAY_LEFT, false);
-      ObjectSetInteger(0, name, OBJPROP_COLOR, ColorSwingLine);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, InkColor(ColorSwingLine, ink));
       ObjectSetInteger(0, name, OBJPROP_STYLE, SwingLineStyle);
       ObjectSetInteger(0, name, OBJPROP_WIDTH, SwingLineWidth);
       ObjectSetInteger(0, name, OBJPROP_BACK, true);
@@ -2359,6 +2425,7 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
 
    // Компактный маркер: без «простыни» SL/TP на графике
    DrawRect(base + "_R", t1, bar.high, t2, bar.low, fill, true, true);
+   ObjectSetString(0, base + "_R", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)c));
 
    string tip = (direction > 0) ? ("▲ " + sig + " BUY") : ("▼ " + sig + " SELL");
    double text_price = (direction > 0) ? (bar.low - 10*PointValue()) : (bar.high + 10*PointValue());
@@ -2366,6 +2433,7 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
             (direction > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
    ObjectSetInteger(0, base + "_T", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, base + "_T", OBJPROP_ZORDER, 90);
+   ObjectSetString(0, base + "_T", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)c));
 
    if(ShowArrows)
    {
@@ -2374,6 +2442,40 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
          : (bar.high + 18 * PointValue());
       DrawArrow(base + "_A", t1, arrow_price, (direction > 0), c);
       ObjectSetInteger(0, base + "_A", OBJPROP_ZORDER, 91);
+      ObjectSetString(0, base + "_A", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)c));
+   }
+}
+
+void AgeSignalObjects()
+{
+   if(!FadeOldMarkings)
+      return;
+   string pfx = Prefix() + "SIG_";
+   int total = ObjectsTotal(0, 0, -1);
+   for(int i = total - 1; i >= 0; i--)
+   {
+      string name = ObjectName(0, i, 0, -1);
+      if(StringFind(name, pfx) != 0)
+         continue;
+      datetime t = (datetime)ObjectGetInteger(0, name, OBJPROP_TIME, 0);
+      double ink = 1.0;
+      if(!MarkInk(t, ink))
+      {
+         ObjectDelete(0, name);
+         continue;
+      }
+      if(ink >= 0.98)
+         continue;
+      if(StringFind(name, "_T") >= 0 && ink < 0.45)
+      {
+         ObjectDelete(0, name);
+         continue;
+      }
+      string tip = ObjectGetString(0, name, OBJPROP_TOOLTIP);
+      color base = ColorBuyMarker;
+      if(StringFind(tip, "ink:") == 0)
+         base = (color)StringToInteger(StringSubstr(tip, 4));
+      ObjectSetInteger(0, name, OBJPROP_COLOR, InkColor(base, ink));
    }
 }
 
@@ -2654,6 +2756,10 @@ void DrawSessionLevels()
    for(int i = 0; i < n; i++)
    {
       if(!g_sessions[i].valid) continue;
+      double ink = 1.0;
+      if(!MarkInk(g_sessions[i].t_end, ink))
+         continue;
+      color sc = InkColor(g_sessions[i].clr, ink);
       string base = SessionObjKey(g_sessions[i].name, g_sessions[i].t_start);
 
       string nH  = base + "H";
@@ -2665,29 +2771,43 @@ void DrawSessionLevels()
       string nSH = base + "SH";
 
       int k = ArraySize(keep);
-      ArrayResize(keep, k + 6);
-      keep[k] = nH; keep[k+1] = nHT; keep[k+2] = nHL;
-      keep[k+3] = nL; keep[k+4] = nLT; keep[k+5] = nLL;
+      ArrayResize(keep, k + 2);
+      keep[k] = nH;
+      keep[k + 1] = nL;
 
       DrawHLineSegment(nH, g_sessions[i].t_high, ray_right, g_sessions[i].high,
-                       g_sessions[i].clr, STYLE_DOT, 1, "");
+                       sc, STYLE_DOT, 1, "");
       datetime tick2 = g_sessions[i].t_high + (datetime)sec;
-      DrawHLineSegment(nHT, g_sessions[i].t_high, tick2, g_sessions[i].high,
-                       g_sessions[i].clr, STYLE_SOLID, 3, "");
-      DrawText(nHL, g_sessions[i].t_high, g_sessions[i].high + 4 * PointValue(),
-               g_sessions[i].name, g_sessions[i].clr, ANCHOR_LEFT_LOWER);
+      if(ink >= 0.45)
+      {
+         DrawHLineSegment(nHT, g_sessions[i].t_high, tick2, g_sessions[i].high,
+                          sc, STYLE_SOLID, (ink < 0.75 ? 1 : 3), "");
+         DrawText(nHL, g_sessions[i].t_high, g_sessions[i].high + 4 * PointValue(),
+                  g_sessions[i].name, sc, ANCHOR_LEFT_LOWER);
+         int kk = ArraySize(keep);
+         ArrayResize(keep, kk + 2);
+         keep[kk] = nHT;
+         keep[kk + 1] = nHL;
+      }
 
       DrawHLineSegment(nL, g_sessions[i].t_low, ray_right, g_sessions[i].low,
-                       g_sessions[i].clr, STYLE_DOT, 1, "");
+                       sc, STYLE_DOT, 1, "");
       datetime tick2l = g_sessions[i].t_low + (datetime)sec;
-      DrawHLineSegment(nLT, g_sessions[i].t_low, tick2l, g_sessions[i].low,
-                       g_sessions[i].clr, STYLE_SOLID, 3, "");
-      DrawText(nLL, g_sessions[i].t_low, g_sessions[i].low - 4 * PointValue(),
-               g_sessions[i].name, g_sessions[i].clr, ANCHOR_LEFT_UPPER);
+      if(ink >= 0.45)
+      {
+         DrawHLineSegment(nLT, g_sessions[i].t_low, tick2l, g_sessions[i].low,
+                          sc, STYLE_SOLID, (ink < 0.75 ? 1 : 3), "");
+         DrawText(nLL, g_sessions[i].t_low, g_sessions[i].low - 4 * PointValue(),
+                  g_sessions[i].name, sc, ANCHOR_LEFT_UPPER);
+         int kk = ArraySize(keep);
+         ArrayResize(keep, kk + 2);
+         keep[kk] = nLT;
+         keep[kk + 1] = nLL;
+      }
 
       if(ShowSessionShading)
       {
-         color fill = ToARGB(g_sessions[i].clr, 18);
+         color fill = ToARGB(g_sessions[i].clr, (int)(18.0 * ink));
          DrawRect(nSH, g_sessions[i].t_start, g_sessions[i].high,
                   g_sessions[i].t_end, g_sessions[i].low, fill, true, true);
          int kk = ArraySize(keep);
@@ -2839,13 +2959,31 @@ void UpdateLiquidityZones(const MqlRates &rates[])
    for(int i = 0; i < keep; i++)
    {
       g_liqZones[i] = tmp[i];
-      color fill = ToARGB((tmp[i].type > 0) ? ColorSupplyZone : ColorDemandZone, 55);
+      double ink = 1.0;
+      if(!MarkInk(tmp[i].t1, ink))
+         continue;
+      color base = (tmp[i].type > 0) ? ColorSupplyZone : ColorDemandZone;
       string name = Prefix() + "LIQ_" + IntegerToString(tmp[i].id);
-      DrawRect(name, tmp[i].t1, tmp[i].high, tmp[i].t2, tmp[i].low, fill, true, true);
-      string lbl = (tmp[i].type > 0) ? "Предложение" : "Спрос";
-      DrawText(name + "_T", tmp[i].t1, (tmp[i].type > 0) ? tmp[i].high : tmp[i].low,
-               lbl, (tmp[i].type > 0) ? ColorNY : ColorLondon,
-               (tmp[i].type > 0) ? ANCHOR_LEFT_LOWER : ANCHOR_LEFT_UPPER);
+      if(ink >= 0.45)
+      {
+         color fill = ToARGB(base, (int)(55.0 * ink));
+         DrawRect(name, tmp[i].t1, tmp[i].high, tmp[i].t2, tmp[i].low, fill, true, true);
+         string lbl = (tmp[i].type > 0) ? "Предложение" : "Спрос";
+         color lc = InkColor((tmp[i].type > 0) ? ColorNY : ColorLondon, ink);
+         DrawText(name + "_T", tmp[i].t1, (tmp[i].type > 0) ? tmp[i].high : tmp[i].low,
+                  lbl, lc, (tmp[i].type > 0) ? ANCHOR_LEFT_LOWER : ANCHOR_LEFT_UPPER);
+      }
+      else
+      {
+         ObjectCreate(0, name, OBJ_RECTANGLE, 0, tmp[i].t1, tmp[i].high, tmp[i].t2, tmp[i].low);
+         ObjectSetInteger(0, name, OBJPROP_COLOR, InkColor(base, ink));
+         ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_DOT);
+         ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+         ObjectSetInteger(0, name, OBJPROP_FILL, false);
+         ObjectSetInteger(0, name, OBJPROP_BACK, true);
+         ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+         if(ObjExists(name + "_T")) ObjectDelete(0, name + "_T");
+      }
    }
 }
 
@@ -3540,10 +3678,11 @@ void ClearStructureObjects()
 
 void DrawFib30Line(const MqlRates &rates[])
 {
-   // Стандартный OBJ_FIBO: от НИЖНЕЙ к ВЕРХНЕЙ точке хода, только уровень 30%.
-   // Точка A = последний значимый минимум (старт отката).
-   // Точка B = МАКСИМУМ всего хода к этому минимуму (не соседний мелкий хай!).
-   // Уровень 0.3 = low + 0.3*(high − low) — как красная «30» на ручном Fib.
+   // Безоткатный ход: свечи в одну сторону, пока встречный откат < 30% всего диапазона.
+   // Когда откат достигает 30% и больше:
+   //   0% / первая точка = экстремум, откуда откат начался;
+   //   100% = точка, откуда начался безоткатный ход;
+   //   линия «30» = от 0% в сторону 100% на 30% диапазона.
    if(!ShowFib30)
       return;
 
@@ -3560,104 +3699,147 @@ void DrawFib30Line(const MqlRates &rates[])
       return;
    }
 
-   SPivot swings[];
-   if(!BuildSwingPointsTF(rates, swings, 64, EffectiveSwingDepth()) || ArraySize(swings) < 2)
-   {
-      if(ObjExists(fn)) ObjectDelete(0, fn);
-      return;
-   }
-   const int ns = ArraySize(swings);
+   // rates[] — серия: индекс 0 самый свежий. Идём от старых баров к новым.
+   const double retrace_need = 0.30;
+   const int look = MathMin(nr, MathMax(50, StructureLookbackBars));
+   const int oldest = look - 1;
+   const double min_range = PointValue() * 5.0;
 
-   // --- последний минимум и последний максимум ---
-   int i_low = -1, i_high = -1;
-   for(int i = ns - 1; i >= 0; i--)
-   {
-      if(i_low < 0 && swings[i].type == -1) i_low = i;
-      if(i_high < 0 && swings[i].type == 1) i_high = i;
-      if(i_low >= 0 && i_high >= 0) break;
-   }
-   if(i_low < 0 || i_high < 0)
-   {
-      if(ObjExists(fn)) ObjectDelete(0, fn);
-      return;
-   }
+   int dir = 0; // -1 безоткатное падение, +1 безоткатный рост
+   double origin = 0.0, tip = 0.0;
+   datetime t_origin = 0, t_tip = 0;
+   double run_hi = rates[oldest].high, run_lo = rates[oldest].low;
+   datetime t_run_hi = rates[oldest].time, t_run_lo = rates[oldest].time;
 
-   double price_lo, price_hi;
-   datetime time_lo, time_hi;
+   bool have = false;
+   double show_o = 0.0, show_t = 0.0;
+   datetime show_ot = 0, show_tt = 0;
+   double show_range = 0.0;
 
-   // Актуальный ход: если последний экстремум — минимум (откат вверх) →
-   // низ = этот минимум, верх = максимальный хай ДО него (весь импульс вниз).
-   // Если последний экстремум — максимум → верх = он, низ = минимальный лой ДО него.
-   if(swings[i_low].t >= swings[i_high].t)
+   for(int i = oldest - 1; i >= 0; i--)
    {
-      // минимум свежее (как на скрине: Спрос = 0)
-      price_lo = swings[i_low].p;
-      time_lo  = swings[i_low].t;
-      price_hi = swings[i_low].p;
-      time_hi  = swings[i_low].t;
-      for(int j = 0; j < i_low; j++)
+      const double h = rates[i].high;
+      const double l = rates[i].low;
+      const datetime tm = rates[i].time;
+
+      if(dir == 0)
       {
-         if(swings[j].type != 1) continue;
-         if(swings[j].p > price_hi)
+         if(h > run_hi) { run_hi = h; t_run_hi = tm; }
+         if(l < run_lo) { run_lo = l; t_run_lo = tm; }
+         if(run_hi - run_lo <= min_range)
+            continue;
+         if(t_run_hi >= t_run_lo)
          {
-            price_hi = swings[j].p;
-            time_hi  = swings[j].t;
+            dir = 1;
+            origin = run_lo; t_origin = t_run_lo;
+            tip = run_hi;    t_tip = t_run_hi;
          }
+         else
+         {
+            dir = -1;
+            origin = run_hi; t_origin = t_run_hi;
+            tip = run_lo;    t_tip = t_run_lo;
+         }
+         continue;
       }
-      // уточнить хай по барам между time_hi..time_lo
-      for(int r = 0; r < nr; r++)
+
+      if(dir < 0)
       {
-         if(rates[r].time < time_hi || rates[r].time > time_lo) continue;
-         if(rates[r].high > price_hi)
+         if(l < tip)
          {
-            price_hi = rates[r].high;
-            time_hi  = rates[r].time;
+            tip = l;
+            t_tip = tm;
+            continue;
          }
+         const double range = origin - tip;
+         if(range <= min_range || (h - tip) < retrace_need * range)
+            continue;
       }
+      else
+      {
+         if(h > tip)
+         {
+            tip = h;
+            t_tip = tm;
+            continue;
+         }
+         const double range_up = tip - origin;
+         if(range_up <= min_range || (tip - l) < retrace_need * range_up)
+            continue;
+      }
+
+      // Откат достиг 30% всего диапазона. Фиксируем именно этот безоткатный ход.
+      show_o = origin; show_ot = t_origin;
+      show_t = tip;    show_tt = t_tip;
+      show_range = MathAbs(origin - tip);
+      have = true;
+
+      if(dir < 0)
+      {
+         dir = 1;
+         origin = tip; t_origin = t_tip;
+         tip = h;      t_tip = tm;
+      }
+      else
+      {
+         dir = -1;
+         origin = tip; t_origin = t_tip;
+         tip = l;      t_tip = tm;
+      }
+   }
+
+   double price_100 = 0.0, price_0 = 0.0;
+   datetime time_100 = 0, time_0 = 0;
+   if(dir != 0 && MathAbs(origin - tip) > show_range)
+   {
+      // Безоткатный ход ещё идёт — сетка по нему, 30% впереди по ходу.
+      price_100 = origin; time_100 = t_origin;
+      price_0   = tip;    time_0   = t_tip;
+   }
+   else if(have)
+   {
+      price_100 = show_o; time_100 = show_ot;
+      price_0   = show_t; time_0   = show_tt;
+   }
+   else if(dir != 0)
+   {
+      price_100 = origin; time_100 = t_origin;
+      price_0   = tip;    time_0   = t_tip;
    }
    else
    {
-      // максимум свежее
-      price_hi = swings[i_high].p;
-      time_hi  = swings[i_high].t;
-      price_lo = swings[i_high].p;
-      time_lo  = swings[i_high].t;
-      for(int j = 0; j < i_high; j++)
-      {
-         if(swings[j].type != -1) continue;
-         if(swings[j].p < price_lo)
-         {
-            price_lo = swings[j].p;
-            time_lo  = swings[j].t;
-         }
-      }
-      for(int r = 0; r < nr; r++)
-      {
-         if(rates[r].time < time_lo || rates[r].time > time_hi) continue;
-         if(rates[r].low < price_lo)
-         {
-            price_lo = rates[r].low;
-            time_lo  = rates[r].time;
-         }
-      }
+      if(ObjExists(fn)) ObjectDelete(0, fn);
+      return;
    }
 
-   if(price_hi - price_lo <= PointValue() * 5.0)
+   if(MathAbs(price_100 - price_0) <= PointValue() * 5.0 || time_100 == time_0)
    {
       if(ObjExists(fn)) ObjectDelete(0, fn);
       return;
    }
 
-   // Стандартный Fib: точка1 = низ, точка2 = верх
+   // «30» всегда со стороны отката: от 0% к 100%.
+   // У OBJ_FIBO значение 0 лежит на нижней цене, 1 — на верхней,
+   // поэтому на росте уровень объекта = 0.70, чтобы линия была у вершины.
+   const double price_30 = price_0 + 0.30 * (price_100 - price_0);
+   const double price_bot = MathMin(price_0, price_100);
+   const double price_top = MathMax(price_0, price_100);
+   const double level = (price_30 - price_bot) / (price_top - price_bot);
+
+   datetime time_end = time_0;
+   double   price_end = price_0;
+   datetime time_start = time_100;
+   double   price_start = price_100;
+
    if(!ObjExists(fn))
    {
-      if(!ObjectCreate(0, fn, OBJ_FIBO, 0, time_lo, price_lo, time_hi, price_hi))
+      if(!ObjectCreate(0, fn, OBJ_FIBO, 0, time_end, price_end, time_start, price_start))
          return;
    }
    else
    {
-      ObjectMove(0, fn, 0, time_lo, price_lo);
-      ObjectMove(0, fn, 1, time_hi, price_hi);
+      ObjectMove(0, fn, 0, time_end, price_end);
+      ObjectMove(0, fn, 1, time_start, price_start);
    }
 
    ObjectSetInteger(0, fn, OBJPROP_COLOR, clrNONE); // сам «треугольник» не красим
@@ -3672,7 +3854,7 @@ void DrawFib30Line(const MqlRates &rates[])
 
    // Только 30%
    ObjectSetInteger(0, fn, OBJPROP_LEVELS, 1);
-   ObjectSetDouble(0, fn, OBJPROP_LEVELVALUE, 0, 0.30);
+   ObjectSetDouble(0, fn, OBJPROP_LEVELVALUE, 0, level);
    ObjectSetString(0, fn, OBJPROP_LEVELTEXT, 0, "30");
    ObjectSetInteger(0, fn, OBJPROP_LEVELCOLOR, 0, ColorFib30);
    ObjectSetInteger(0, fn, OBJPROP_LEVELSTYLE, 0, STYLE_SOLID);
@@ -3690,12 +3872,31 @@ void DrawStructureZone(const SStructureZone &z)
    if(z.kind == SK_PD && !ShowPullbackZones) return;
    if(z.kind == SK_CASCADE && !ShowCascadeMarks) return;
    if(z.kind == SK_RM && !ShowReversalMoments) return;
+   double ink = 1.0;
+   if(!MarkInk(z.t1, ink))
+      return;
    // Паттерн-only метки (без ЗУ/ПД/каскад) — только при ShowAll12Patterns
    if(z.pattern != PAT_NONE && z.kind != SK_ZU && z.kind != SK_PD && z.kind != SK_CASCADE && z.kind != SK_RM
       && !ShowAll12Patterns)
       return;
 
    string base = Prefix() + "STR_" + IntegerToString(z.id);
+
+   // Разворотный момент: узкая рамка на свече остановки. Красный — продажа, синий — покупка.
+   if(z.kind == SK_RM)
+   {
+      const color rm = InkColor((z.direction > 0) ? ColorRM_Buy : ColorRM_Sell, ink);
+      ObjectCreate(0, base + "_OL", OBJ_RECTANGLE, 0, z.t1, z.high, z.t2, z.low);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_COLOR, rm);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_STYLE, (ink < 0.65) ? STYLE_DOT : STYLE_SOLID);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_WIDTH, (ink < 0.65) ? 1 : 2);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_FILL, false);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_BACK, false);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_ZORDER, 20);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_SELECTABLE, false);
+      return;
+   }
+
    color fill_c = ColorPD_Zone;
    if(z.kind == SK_ZU)
       fill_c = (z.direction > 0) ? ColorZU_Buy : ColorZU_Sell;
@@ -3707,11 +3908,12 @@ void DrawStructureZone(const SStructureZone &z)
       fill_c = (z.direction > 0) ? ColorPatternBuy : ColorPatternSell;
    if(!z.valid)
       fill_c = clrDarkGray;
+   color edge = InkColor(fill_c, ink);
 
    // Зона: по умолчанию ТОЛЬКО контур (без заливки) — иначе коричневое «пятно» перекрывает график
-   if(ShowZoneFill)
+   if(ShowZoneFill && ink >= 0.45)
    {
-      color fill = ToARGB(fill_c, (z.kind == SK_RM) ? 25 : (z.valid ? 28 : 18));
+      color fill = ToARGB(fill_c, (int)(((z.kind == SK_RM) ? 25 : (z.valid ? 28 : 18)) * ink));
       DrawRect(base + "_BOX", z.t1, z.high, z.t2, z.low, fill, true, true);
       ObjectSetInteger(0, base + "_BOX", OBJPROP_ZORDER, 1);
    }
@@ -3719,7 +3921,7 @@ void DrawStructureZone(const SStructureZone &z)
       ObjectDelete(0, base + "_BOX");
 
    ObjectCreate(0, base + "_OL", OBJ_RECTANGLE, 0, z.t1, z.high, z.t2, z.low);
-   ObjectSetInteger(0, base + "_OL", OBJPROP_COLOR, fill_c);
+   ObjectSetInteger(0, base + "_OL", OBJPROP_COLOR, edge);
    ObjectSetInteger(0, base + "_OL", OBJPROP_STYLE, STYLE_DOT);
    ObjectSetInteger(0, base + "_OL", OBJPROP_WIDTH, 1);
    ObjectSetInteger(0, base + "_OL", OBJPROP_FILL, false);
@@ -3729,16 +3931,18 @@ void DrawStructureZone(const SStructureZone &z)
 
    // линия «30» рисуется один раз в DrawFib30Line() после всех зон
 
-   if(ShowStructureLabels)
+   if(ShowStructureLabels && ink >= 0.45)
    {
       string lbl = z.label;
       if(ShowPatternPercents && z.pct > 0.0)
          lbl = StringFormat("%s | %.0f%%", z.label, z.pct);
       if(StringLen(z.tf_tag) > 0)
          lbl = z.tf_tag + " " + lbl;
-      DrawText(base + "_LBL", z.t1, z.high + 3 * PointValue(), lbl, fill_c, ANCHOR_LEFT_LOWER);
+      DrawText(base + "_LBL", z.t1, z.high + 3 * PointValue(), lbl, edge, ANCHOR_LEFT_LOWER);
       ObjectSetInteger(0, base + "_LBL", OBJPROP_FONTSIZE, 7);
    }
+   else if(ObjExists(base + "_LBL"))
+      ObjectDelete(0, base + "_LBL");
 }
 
 void PushStructureZoneEx(const int kind, const int pattern, const int direction,
@@ -4275,62 +4479,86 @@ void DetectPattern_Cascades(const MqlRates &rates[], const SPivot &swings[], con
    }
 }
 
+void DrawRMMark(const string name, const datetime t1, const datetime t2,
+                const double hi, const double lo, const int dir, const double ink)
+{
+   const color rm = InkColor((dir > 0) ? ColorRM_Buy : ColorRM_Sell, ink);
+   ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, hi, t2, lo);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, rm);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, (ink < 0.65) ? STYLE_DOT : STYLE_SOLID);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, (ink < 0.65) ? 1 : 2);
+   ObjectSetInteger(0, name, OBJPROP_FILL, false);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 20);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+}
+
 void DetectReversalMoments(const MqlRates &rates[], const string tf_tag)
 {
    if(!ShowReversalMoments) return;
-   if(ArraySize(rates) < RM_ImpulseBars + 5) return;
+   const int n = ArraySize(rates);
+   const int bars = MathMax(2, RM_ImpulseBars);
+   if(n < bars + 5) return;
 
    double atr = 0.0;
    if(!GetBufferValue(g_hATR_Filter, 1, atr) || atr <= 0.0) return;
 
-   double up_move = 0.0, dn_move = 0.0;
-   for(int i = 2; i <= RM_ImpulseBars + 1; i++)
+   // Несколько последних остановок. Свежие — яркие, старые бледнеют и пропадают.
+   const int sec = PeriodSeconds(Timeframe);
+   int by_time = 48;
+   if(sec > 0 && MarkHideAfterHours > 0)
+      by_time = MarkHideAfterHours * 3600 / sec + bars + 2;
+   if(by_time < 48) by_time = 48;
+   const int scan = MathMin(n - bars - 2, by_time);
+   bool pushed = false;
+   int drawn = 0;
+   for(int shift = 1; shift <= scan; shift++)
    {
-      up_move += MathMax(0.0, rates[i].close - rates[i].open);
-      dn_move += MathMax(0.0, rates[i].open - rates[i].close);
-   }
+      double up_move = 0.0, dn_move = 0.0;
+      double win_hi = rates[shift].high, win_lo = rates[shift].low;
+      for(int i = shift + 1; i <= shift + bars; i++)
+      {
+         up_move += MathMax(0.0, rates[i].close - rates[i].open);
+         dn_move += MathMax(0.0, rates[i].open - rates[i].close);
+         if(rates[i].high > win_hi) win_hi = rates[i].high;
+         if(rates[i].low < win_lo) win_lo = rates[i].low;
+      }
 
-   MqlRates stall = rates[1];
-   double body = MathAbs(stall.close - stall.open);
-   if(body > RM_StallBodyATR_Max * atr) return;
+      MqlRates stall = rates[shift];
+      const double body = MathAbs(stall.close - stall.open);
+      if(body > RM_StallBodyATR_Max * atr) continue;
 
-   int dir = 0;
-   if(up_move >= RM_ImpulseATR_Mult * atr && up_move > dn_move) dir = -1;
-   else if(dn_move >= RM_ImpulseATR_Mult * atr && dn_move > up_move) dir = 1;
-   else return;
+      int dir = 0;
+      if(up_move >= RM_ImpulseATR_Mult * atr && up_move > dn_move) dir = -1;
+      else if(dn_move >= RM_ImpulseATR_Mult * atr && dn_move > up_move) dir = 1;
+      else continue;
 
-   bool near_level = false;
-   if(g_sightActive && g_sightDirection == dir) near_level = true;
-   if(g_boundActive)
-   {
-      if(dir < 0 && NearPrice(stall.high, g_boundHigh, 0.4 * atr)) near_level = true;
-      if(dir > 0 && NearPrice(stall.low, g_boundLow, 0.4 * atr)) near_level = true;
-   }
-   for(int i = 0; i < ArraySize(g_structZones); i++)
-   {
-      if(!g_structZones[i].active || !g_structZones[i].valid) continue;
-      if(g_structZones[i].direction != dir) continue;
-      if(stall.low <= g_structZones[i].high && stall.high >= g_structZones[i].low)
-         near_level = true;
-   }
-   for(int i = 0; i < ArraySize(g_sessions); i++)
-   {
-      if(!g_sessions[i].valid) continue;
-      if(NearPrice(stall.high, g_sessions[i].high, 0.5 * atr) || NearPrice(stall.low, g_sessions[i].low, 0.5 * atr))
-         near_level = true;
-   }
-   if(!near_level && ConfirmPattern != CP_OFF)
-   {
-      if(!ConfirmCandlePattern(dir, stall, rates[2])) return;
-   }
-   else if(!near_level)
-      return;
+      // Продажа — остановка на вершине импульса, покупка — на дне.
+      if(dir < 0 && stall.high + PointValue() < win_hi) continue;
+      if(dir > 0 && stall.low - PointValue() > win_lo) continue;
 
-   int sec = PeriodSeconds(Timeframe);
-   double pad = MathMax(3 * PointValue(), 0.15 * atr);
-   PushStructureZoneEx(SK_RM, PAT_NONE, dir, stall.time, stall.time + (datetime)sec,
-                       stall.high + pad, stall.low - pad, 0.0, 0.0,
-                       (dir > 0) ? "РМ ПОКУПКА" : "РМ ПРОДАЖА", true, tf_tag);
+      double ink = 1.0;
+      if(!MarkInk(stall.time, ink))
+         break;
+
+      const bool on_chart = (StringLen(tf_tag) == 0 || tf_tag == ShortTFName(Timeframe));
+      if(!pushed)
+      {
+         PushStructureZoneEx(SK_RM, PAT_NONE, dir, stall.time, stall.time + (datetime)sec,
+                             stall.high, stall.low, 0.0, 0.0,
+                             (dir > 0) ? "РМ ПОКУПКА" : "РМ ПРОДАЖА", true, tf_tag);
+         pushed = true;
+      }
+      else if(on_chart || ShowSlowTFStructures)
+      {
+         DrawRMMark(Prefix() + "STR_RMH_" + tf_tag + "_" + TimeToObjectId(stall.time),
+                    stall.time, stall.time + (datetime)sec,
+                    stall.high, stall.low, dir, ink);
+      }
+      drawn++;
+      if(drawn >= 8)
+         break;
+   }
 }
 
 void DetectReversalMoments(const MqlRates &rates[])
@@ -5538,7 +5766,13 @@ void ProcessOnBarClose()
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
 
-   int need = MathMax(600, MathMax(CZ_LookbackN + 50, LiqLookbackBars + 50));
+   int life_bars = 600;
+   int sec_tf = PeriodSeconds(Timeframe);
+   if(sec_tf > 0 && MarkHideAfterHours > 0)
+      life_bars = MarkHideAfterHours * 3600 / sec_tf + 120;
+   if(life_bars < 600) life_bars = 600;
+   if(life_bars > 4000) life_bars = 4000;
+   int need = MathMax(life_bars, MathMax(CZ_LookbackN + 50, LiqLookbackBars + 50));
    int copied = CopyRates(_Symbol, Timeframe, 0, need, rates);
    if(copied < (CZ_LookbackN + 10))
       return;
@@ -5553,6 +5787,7 @@ void ProcessOnBarClose()
    ProcessBrokenZone(rates);
    UpdateZones(rates);
    UpdateSwingLine(rates);
+   AgeSignalObjects();
 }
 
 void ProcessIntrabar()
