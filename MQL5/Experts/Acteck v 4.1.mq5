@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  Acteck v 4.1                                                     |
+//|  Acteck v 4.11                                                    |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "Acteck v 4.1 — Sniper structures: ЗУ/ПД/каскад/РМ, speed, sessions."
-#property version   "4.10"
+#property description "Acteck v 4.11 — Sniper structures: ЗУ/ПД/каскад/РМ, speed, sessions."
+#property version   "4.11"
 
-#define EA_VERSION "4.1"
+#define EA_VERSION "4.11"
 
 
 //=========================
@@ -267,7 +267,10 @@ input bool                 ShowReversalMoments  = true;   // РМ: рамка Pr
 input bool                 ShowGUDLevels        = true;   // ГУД: глобальный уровень дисбаланса (М/W)
 input bool                 ShowZoneFill         = false;  // заливка ЗУ/ПД ВЫКЛ — только контур
 input bool                 ShowFib30            = true;   // тонкая линия «30» как в Sniper-PRO (без заливки)
-input color                ColorFib30           = clrDodgerBlue; // как синяя сетка на эталоне
+input bool                 ShowContinuedMoveZ   = true;   // Z-контур хода: 2 горизонтали + косая пунктиром
+input color                ColorFib30           = clrDodgerBlue; // сплошная «30» (актуальная, справа)
+input color                ColorFib30Old        = clrOrange;     // «30» прошлого хода (память до след. дня)
+input color                ColorContinuedMove   = clrSilver;     // пунктир каркаса хода
 input ENUM_SPEED_PRESET    SpeedPreset          = SPEED_CALM; // скальп / спокойный / свинги — для ЛЮБОЙ пары
 input int                  IndicatorSpeed       = 8;      // глубина, если SpeedPreset=CUSTOM (2..60)
 input int                  StructureLookbackBars = 250;    // баров истории для структур
@@ -514,6 +517,12 @@ datetime g_lastSessionAlertDay = 0;
 string   g_alertLastKey = "";
 datetime g_alertLastTime = 0;
 
+datetime g_fib30_origin_t = 0;
+double   g_fib30_price    = 0.0;
+datetime g_fib30_t1       = 0;
+datetime g_fib30_t2       = 0;
+bool     g_fib30_have     = false;
+
 // Forward declarations (MQL5: call sites before definitions)
 string ShortTFName(const ENUM_TIMEFRAMES tf);
 string PatternName(const int pat);
@@ -661,6 +670,25 @@ color InkColor(const color c, const double ink)
    int a = (int)(255.0 * ink);
    if(a < 22) a = 22;
    return ToARGB(c, a);
+}
+
+datetime DayFloor(const datetime t)
+{
+   MqlDateTime st;
+   TimeToStruct(t, st);
+   st.hour = 0;
+   st.min  = 0;
+   st.sec  = 0;
+   return StructToTime(st);
+}
+
+color MixContrast50(const color c)
+{
+   color bg = (color)ChartGetInteger(0, CHART_COLOR_BACKGROUND);
+   int r = ((int)((uint)c & 0xFF) + (int)((uint)bg & 0xFF)) / 2;
+   int g = ((int)(((uint)c >> 8) & 0xFF) + (int)(((uint)bg >> 8) & 0xFF)) / 2;
+   int b = ((int)(((uint)c >> 16) & 0xFF) + (int)(((uint)bg >> 16) & 0xFF)) / 2;
+   return (color)((uint)r | ((uint)g << 8) | ((uint)b << 16));
 }
 
 // Spread in points
@@ -959,6 +987,26 @@ void DrawHLineSegment(const string name, datetime t1, datetime t2, double price,
 
    if(label != "")
       ObjectSetString(0, name, OBJPROP_TEXT, label);
+}
+
+void DrawTrendSegment(const string name, datetime t1, double p1, datetime t2, double p2,
+                      color clr, ENUM_LINE_STYLE style, int width)
+{
+   if(!ObjExists(name))
+   {
+      ObjectCreate(0, name, OBJ_TREND, 0, t1, p1, t2, p2);
+      ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
+      ObjectSetInteger(0, name, OBJPROP_RAY_LEFT, false);
+   }
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_TIME, 0, t1);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 0, p1);
+   ObjectSetInteger(0, name, OBJPROP_TIME, 1, t2);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 1, p2);
 }
 
 void DrawText(const string name, datetime t, double price, const string text, color clr, ENUM_ANCHOR_POINT anchor)
@@ -3959,29 +4007,69 @@ void ClearStructureObjects()
    DeleteObjectsWithPrefix(Prefix() + "PAT_");
    DeleteObjectsWithPrefix(Prefix() + "BND_");
    DeleteObjectsWithPrefix(Prefix() + "RSI_");
-   DeleteObjectsWithPrefix(Prefix() + "FIB30");
+   DeleteObjectsWithPrefix(Prefix() + "FIB30_");
+}
+
+void Fib30HistoryPurge(const bool have_live)
+{
+   if(!have_live)
+      return;
+   const datetime today = DayFloor(TimeCurrent());
+   const string hp = Prefix() + "FIB30H_";
+   int total = ObjectsTotal(0, 0, -1);
+   for(int i = total - 1; i >= 0; i--)
+   {
+      string nm = ObjectName(0, i, 0, -1);
+      if(StringFind(nm, hp) != 0)
+         continue;
+      datetime marked = (datetime)StringToInteger(ObjectGetString(0, nm, OBJPROP_TOOLTIP));
+      if(marked > 0 && marked < today)
+         ObjectDelete(0, nm);
+   }
+}
+
+void Fib30ArchiveCurrent()
+{
+   if(!g_fib30_have || g_fib30_t1 == 0 || g_fib30_t2 == 0)
+      return;
+   const string name = Prefix() + "FIB30H_" + TimeToObjectId(g_fib30_origin_t);
+   const string txt  = name + "_T";
+   const color faded = MixContrast50(ColorFib30Old);
+   const string day  = IntegerToString((long)DayFloor(TimeCurrent()));
+   DrawHLineSegment(name, g_fib30_t1, g_fib30_t2, g_fib30_price, faded, STYLE_SOLID, 1, "");
+   ObjectSetString(0, name, OBJPROP_TOOLTIP, day);
+   DrawText(txt, g_fib30_t2, g_fib30_price, "30", faded, ANCHOR_LEFT_LOWER);
+   ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 8);
+   ObjectSetString(0, txt, OBJPROP_TOOLTIP, day);
 }
 
 void DrawFib30Line(const MqlRates &rates[])
 {
-   // Безоткатный ход: свечи в одну сторону, пока встречный откат < 30% всего диапазона.
-   // Когда откат достигает 30% и больше:
-   //   0% / первая точка = экстремум, откуда откат начался;
-   //   100% = точка, откуда начался безоткатный ход;
-   //   линия «30» = от 0% в сторону 100% на 30% диапазона.
+   // Z пунктиром по импульсу. Актуальная «30» только справа у новых свечей.
+   // Новый ход → прежняя «30» оранжевая, контраст 50%; на следующий день — удалить.
+   const string pfx  = Prefix() + "FIB30";
+   const string live = pfx + "_";
    if(!ShowFib30)
+   {
+      DeleteObjectsWithPrefix(live);
+      DeleteObjectsWithPrefix(pfx + "H_");
+      g_fib30_have = false;
       return;
-
-   string zb = Prefix() + "FIB30_BAND";
-   string fold = Prefix() + "FIB30_T";
-   string fn = Prefix() + "FIB30";
-   if(ObjExists(zb)) ObjectDelete(0, zb);
-   if(ObjExists(fold)) ObjectDelete(0, fold);
+   }
 
    SContinuedMove mv;
-   if(!FindContinuedMove(rates, mv) || mv.range <= MinContinuedMoveRange())
+   const bool have_mv = FindContinuedMove(rates, mv) && mv.range > MinContinuedMoveRange()
+                        && MathAbs(mv.origin - mv.tip) > MinContinuedMoveRange()
+                        && mv.t_origin != mv.t_tip;
+
+   if(g_fib30_have && have_mv && mv.t_origin != g_fib30_origin_t)
+      Fib30ArchiveCurrent();
+
+   Fib30HistoryPurge(have_mv);
+
+   if(!have_mv)
    {
-      if(ObjExists(fn)) ObjectDelete(0, fn);
+      DeleteObjectsWithPrefix(live);
       return;
    }
 
@@ -3989,58 +4077,63 @@ void DrawFib30Line(const MqlRates &rates[])
    const double price_0   = mv.tip;
    const datetime time_100 = mv.t_origin;
    const datetime time_0   = mv.t_tip;
-
-   if(MathAbs(price_100 - price_0) <= MinContinuedMoveRange() || time_100 == time_0)
-   {
-      if(ObjExists(fn)) ObjectDelete(0, fn);
-      return;
-   }
-
-   // «30» всегда со стороны отката: от 0% к 100%.
-   // У OBJ_FIBO значение 0 лежит на нижней цене, 1 — на верхней,
-   // поэтому на росте уровень объекта = 0.70, чтобы линия была у вершины.
    const double price_30 = price_0 + (PD_MinCorrectionPct / 100.0) * (price_100 - price_0);
-   const double price_bot = MathMin(price_0, price_100);
-   const double price_top = MathMax(price_0, price_100);
-   if(price_top - price_bot <= PointValue())
+
+   const int sec = PeriodSeconds(Timeframe);
+   datetime t_left = time_100;
+   datetime t_right = time_0;
+   if(t_right < t_left)
    {
-      if(ObjExists(fn)) ObjectDelete(0, fn);
-      return;
+      datetime sw = t_left; t_left = t_right; t_right = sw;
    }
-   const double level = (price_30 - price_bot) / (price_top - price_bot);
+   long span = (long)(t_right - t_left);
+   long wing = (long)sec * 8;
+   if(span / 6 > wing) wing = span / 6;
+   if(wing < (long)sec * 4) wing = (long)sec * 4;
 
-   datetime time_end = time_0;
-   double   price_end = price_0;
-   datetime time_start = time_100;
-   double   price_start = price_100;
+   datetime h0a = (datetime)((long)time_100 - wing);
+   datetime h0b = (datetime)((long)time_100 + wing);
+   if(h0b > t_right) h0b = t_right;
+   if(h0a >= h0b) h0a = (datetime)((long)h0b - (long)sec * 4);
 
-   if(!ObjExists(fn))
+   const datetime t_now = rates[0].time;
+   datetime h1a = time_0;
+   datetime h1b = t_now;
+   if(h1b < h1a) h1b = (datetime)((long)h1a + (long)sec * 4);
+   h1b = (datetime)((long)h1b + (long)sec * 2);
+   if((long)(h1b - h1a) < (long)sec * 6)
+      h1b = (datetime)((long)h1a + (long)sec * 8);
+
+   if(ShowContinuedMoveZ)
    {
-      if(!ObjectCreate(0, fn, OBJ_FIBO, 0, time_end, price_end, time_start, price_start))
-         return;
+      DrawHLineSegment(live + "Z0", h0a, h0b, price_100, ColorContinuedMove, STYLE_DOT, 1, "");
+      DrawHLineSegment(live + "Z1", h1a, h1b, price_0, ColorContinuedMove, STYLE_DOT, 1, "");
+      DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, ColorContinuedMove, STYLE_DOT, 1);
    }
    else
    {
-      ObjectMove(0, fn, 0, time_end, price_end);
-      ObjectMove(0, fn, 1, time_start, price_start);
+      if(ObjExists(live + "Z0")) ObjectDelete(0, live + "Z0");
+      if(ObjExists(live + "Z1")) ObjectDelete(0, live + "Z1");
+      if(ObjExists(live + "ZD")) ObjectDelete(0, live + "ZD");
    }
 
-   ObjectSetInteger(0, fn, OBJPROP_COLOR, clrNONE);
-   ObjectSetInteger(0, fn, OBJPROP_STYLE, STYLE_DOT);
-   ObjectSetInteger(0, fn, OBJPROP_WIDTH, 1);
-   ObjectSetInteger(0, fn, OBJPROP_RAY_RIGHT, false);
-   ObjectSetInteger(0, fn, OBJPROP_RAY_LEFT, false);
-   ObjectSetInteger(0, fn, OBJPROP_BACK, true);
-   ObjectSetInteger(0, fn, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, fn, OBJPROP_HIDDEN, true);
-   ObjectSetInteger(0, fn, OBJPROP_ZORDER, 50);
+   datetime t30a = time_0;
+   datetime t30b = h1b;
+   if(t30b <= t30a)
+      t30b = (datetime)((long)t30a + (long)sec * 8);
 
-   ObjectSetInteger(0, fn, OBJPROP_LEVELS, 1);
-   ObjectSetDouble(0, fn, OBJPROP_LEVELVALUE, 0, level);
-   ObjectSetString(0, fn, OBJPROP_LEVELTEXT, 0, "30");
-   ObjectSetInteger(0, fn, OBJPROP_LEVELCOLOR, 0, ColorFib30);
-   ObjectSetInteger(0, fn, OBJPROP_LEVELSTYLE, 0, STYLE_SOLID);
-   ObjectSetInteger(0, fn, OBJPROP_LEVELWIDTH, 0, 2);
+   DrawHLineSegment(live + "30", t30a, t30b, price_30, ColorFib30, STYLE_SOLID, 2, "");
+   DrawText(live + "T", t30b, price_30, "30", ColorFib30, ANCHOR_LEFT_LOWER);
+   ObjectSetInteger(0, live + "T", OBJPROP_FONTSIZE, 9);
+
+   g_fib30_origin_t = mv.t_origin;
+   g_fib30_price    = price_30;
+   g_fib30_t1       = t30a;
+   g_fib30_t2       = t30b;
+   g_fib30_have     = true;
+
+   if(ObjExists(pfx)) ObjectDelete(0, pfx);
+   if(ObjExists(pfx + "_BAND")) ObjectDelete(0, pfx + "_BAND");
 }
 
 void DrawStructureZone(const SStructureZone &z)
@@ -5074,7 +5167,7 @@ void RefreshSniperContext(const MqlRates &rates[])
    UpdateLiquidityZones(rates);
    UpdateSniperStructures(rates); // ЗУ / ПД / каскад / РМ (на закрытии бара)
    UpdateSight(rates);            // сторона прицела ДО Fib30
-   DrawFib30Line(rates);          // «30» внутри импульса свинга (= красная 30 на Fib)
+   DrawFib30Line(rates);          // актуальная «30» справа у новых свечей
    ApplyProbabilityHUD(true);
 }
 
@@ -6290,6 +6383,11 @@ int OnInit()
    g_sightAnchor = 0.0;
    g_sightDrawnDirection = 0;
    g_sightUpdateBar = 0;
+   g_fib30_origin_t = 0;
+   g_fib30_price    = 0.0;
+   g_fib30_t1       = 0;
+   g_fib30_t2       = 0;
+   g_fib30_have     = false;
 
    ArrayResize(g_pc_states, 0);
    ArrayResize(g_probHistory, 0);
