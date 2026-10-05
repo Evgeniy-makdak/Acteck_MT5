@@ -1,6 +1,6 @@
-Acteck v 4.1 — установка
+Acteck v 4.12 — установка
 ========================
-1) MetaEditor: Acteck v 4.1.mq5 → F7 (Compile)
+1) MetaEditor: Acteck v 4.12.mq5 → F7 (Compile)
 2) Откройте любой график → перетащите советник
 3) Inputs → «Загрузить» / Load:
      Acteck_v4.1_<PAIR>_calm.set | _scalp.set | _swing_H1.set

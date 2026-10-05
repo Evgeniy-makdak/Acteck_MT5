@@ -1,6 +1,6 @@
 # Acteck v 4.12 (MT5) — Снайпер
 
-Файл: `MQL5/Experts/Acteck v 4.1.mq5`  
+Файл: `MQL5/Experts/Acteck v 4.12.mq5`  
 Пресеты: `MQL5/Presets/Acteck_v4.1_<инструмент>_scalp|calm|swing_H1.set`
 
 Инструменты: EURUSD, GBPUSD, USDJPY, USDCHF, **XAUUSD**, **BTCUSD**.  
@@ -18,7 +18,7 @@
 
 ## Старт
 
-1. MetaEditor → `Acteck v 4.1.mq5` → F7.
+1. MetaEditor → `Acteck v 4.12.mq5` → F7.
 2. На график советник → Inputs → Загрузить пресет → OK.  
    График сам станет нужным символом и ТФ (`SyncChartFromPreset=true`).
 3. Сначала `TradeEnabled=false`: только разметка и стрелки.
