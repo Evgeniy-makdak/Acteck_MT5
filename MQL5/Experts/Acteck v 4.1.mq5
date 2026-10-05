@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  Acteck v 4.11                                                    |
+//|  Acteck v 4.12                                                    |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "Acteck v 4.11 — Sniper structures: ЗУ/ПД/каскад/РМ, speed, sessions."
-#property version   "4.11"
+#property description "Acteck v 4.12 — Sniper structures: ЗУ/ПД/каскад/РМ, speed, sessions."
+#property version   "4.12"
 
-#define EA_VERSION "4.11"
+#define EA_VERSION "4.12"
 
 
 //=========================
@@ -270,13 +270,15 @@ input bool                 ShowFib30            = true;   // тонкая лин
 input bool                 ShowContinuedMoveZ   = true;   // Z-контур хода: 2 горизонтали + косая пунктиром
 input color                ColorFib30           = clrDodgerBlue; // сплошная «30» (актуальная, справа)
 input color                ColorFib30Old        = clrOrange;     // «30» прошлого хода (память до след. дня)
-input color                ColorContinuedMove   = clrSilver;     // пунктир каркаса хода
+input color                ColorContinuedMove   = clrSilver;     // цвет пунктира каркаса хода
+input int                  WidthContinuedMove   = 2;      // толщина пунктира Z (1..4)
 input ENUM_SPEED_PRESET    SpeedPreset          = SPEED_CALM; // скальп / спокойный / свинги — для ЛЮБОЙ пары
 input int                  IndicatorSpeed       = 8;      // глубина, если SpeedPreset=CUSTOM (2..60)
 input int                  StructureLookbackBars = 250;    // баров истории для структур
 input double               PD_MinCorrectionPct  = 30.0;   // мин. откат от ширины хода, %
-input double               PD_MinImpulseATR     = 1.2;    // мин. ширина продолженного хода в ATR (шум меньше этого — не ход)
-input int                  PD_MinImpulsePoints  = 0;      // доп. пол в пунктах; 0 = только ATR (+пол 20 пунктов)
+input double               PD_MinImpulseATR     = 3.0;    // мин. высота импульса в ATR (не одной свечи)
+input int                  PD_MinImpulseBars    = 6;      // мин. баров в импульсе
+input int                  PD_MinImpulsePoints  = 0;      // доп. пол в пунктах; 0 = только ATR+бары
 input int                  PD_RetestMaxHours    = 6;      // макс. часов до ретеста ПД
 input double               CascadeMaxBreakoutPct = 100.0; // каскад: пробой > этого % от X — отмена
 input double               ZU_HeightATR_Mult    = 0.35;   // высота ЗУ в долях ATR
@@ -1078,13 +1080,29 @@ double MinContinuedMoveRange()
 {
    double atr = 0.0;
    GetBufferValue(g_hATR_Filter, 1, atr);
-   const double floor_pts = 20.0 * PointValue();
    double by_atr = (atr > 0.0 && PD_MinImpulseATR > 0.0) ? PD_MinImpulseATR * atr : 0.0;
    double by_pts = (PD_MinImpulsePoints > 0) ? (double)PD_MinImpulsePoints * PointValue() : 0.0;
-   double m = MathMax(floor_pts, MathMax(by_atr, by_pts));
+   double m = MathMax(by_atr, by_pts);
    if(m <= 0.0)
-      m = floor_pts;
+      m = 50.0 * PointValue();
    return m;
+}
+
+double SeedContinuedMoveRange()
+{
+   double atr = 0.0;
+   GetBufferValue(g_hATR_Filter, 1, atr);
+   double seed = (atr > 0.0) ? 0.40 * atr : 10.0 * PointValue();
+   return MathMax(5.0 * PointValue(), seed);
+}
+
+bool ImpulseQualified(const double range, const int bars)
+{
+   if(range <= MinContinuedMoveRange())
+      return false;
+   if(bars < MathMax(2, PD_MinImpulseBars))
+      return false;
+   return true;
 }
 
 bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
@@ -1105,13 +1123,15 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    const double retrace_need = MathMax(0.05, PD_MinCorrectionPct / 100.0);
    const int look = MathMin(nr, MathMax(50, StructureLookbackBars));
    const int oldest = look - 1;
-   const double min_range = MinContinuedMoveRange();
+   const double seed = SeedContinuedMoveRange();
 
    int dir = 0;
    double origin = 0.0, tip = 0.0;
    datetime t_origin = 0, t_tip = 0;
+   int i_origin = oldest, i_tip = oldest;
    double run_hi = rates[oldest].high, run_lo = rates[oldest].low;
    datetime t_run_hi = rates[oldest].time, t_run_lo = rates[oldest].time;
+   int i_run_hi = oldest, i_run_lo = oldest;
 
    bool have = false;
    double show_o = 0.0, show_t = 0.0;
@@ -1127,21 +1147,21 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
 
       if(dir == 0)
       {
-         if(h > run_hi) { run_hi = h; t_run_hi = tm; }
-         if(l < run_lo) { run_lo = l; t_run_lo = tm; }
-         if(run_hi - run_lo <= min_range)
+         if(h > run_hi) { run_hi = h; t_run_hi = tm; i_run_hi = i; }
+         if(l < run_lo) { run_lo = l; t_run_lo = tm; i_run_lo = i; }
+         if(run_hi - run_lo <= seed)
             continue;
          if(t_run_hi >= t_run_lo)
          {
             dir = 1;
-            origin = run_lo; t_origin = t_run_lo;
-            tip = run_hi;    t_tip = t_run_hi;
+            origin = run_lo; t_origin = t_run_lo; i_origin = i_run_lo;
+            tip = run_hi;    t_tip = t_run_hi;    i_tip = i_run_hi;
          }
          else
          {
             dir = -1;
-            origin = run_hi; t_origin = t_run_hi;
-            tip = run_lo;    t_tip = t_run_lo;
+            origin = run_hi; t_origin = t_run_hi; i_origin = i_run_hi;
+            tip = run_lo;    t_tip = t_run_lo;    i_tip = i_run_lo;
          }
          continue;
       }
@@ -1152,10 +1172,11 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          {
             tip = l;
             t_tip = tm;
+            i_tip = i;
             continue;
          }
          const double range = origin - tip;
-         if(range <= min_range || (h - tip) < retrace_need * range)
+         if(range < seed * 0.5 || (h - tip) < retrace_need * range)
             continue;
       }
       else
@@ -1164,35 +1185,43 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          {
             tip = h;
             t_tip = tm;
+            i_tip = i;
             continue;
          }
          const double range_up = tip - origin;
-         if(range_up <= min_range || (tip - l) < retrace_need * range_up)
+         if(range_up < seed * 0.5 || (tip - l) < retrace_need * range_up)
             continue;
       }
 
-      show_o = origin; show_ot = t_origin;
-      show_t = tip;    show_tt = t_tip;
-      show_range = MathAbs(origin - tip);
-      show_dir = dir;
-      have = true;
+      const double done_range = MathAbs(origin - tip);
+      const int done_bars = MathAbs(i_origin - i_tip) + 1;
+      if(ImpulseQualified(done_range, done_bars))
+      {
+         show_o = origin; show_ot = t_origin;
+         show_t = tip;    show_tt = t_tip;
+         show_range = done_range;
+         show_dir = dir;
+         have = true;
+      }
 
       if(dir < 0)
       {
          dir = 1;
-         origin = tip; t_origin = t_tip;
-         tip = h;      t_tip = tm;
+         origin = tip; t_origin = t_tip; i_origin = i_tip;
+         tip = h;      t_tip = tm;       i_tip = i;
       }
       else
       {
          dir = -1;
-         origin = tip; t_origin = t_tip;
-         tip = l;      t_tip = tm;
+         origin = tip; t_origin = t_tip; i_origin = i_tip;
+         tip = l;      t_tip = tm;       i_tip = i;
       }
    }
 
-   // Живой ход берём, только если он шире уже подтверждённого. Иначе — зафиксированный импульс после отката 30%.
-   if(dir != 0 && MathAbs(origin - tip) > show_range && MathAbs(origin - tip) > min_range)
+   const double live_range = MathAbs(origin - tip);
+   const int live_bars = MathAbs(i_origin - i_tip) + 1;
+   // Актуальный ход справа, если он уже импульс. Иначе — последний квалифицированный после 30%.
+   if(dir != 0 && ImpulseQualified(live_range, live_bars))
    {
       m.valid = true;
       m.retraced_30 = false;
@@ -1201,10 +1230,10 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       m.tip = tip;
       m.t_origin = t_origin;
       m.t_tip = t_tip;
-      m.range = MathAbs(origin - tip);
+      m.range = live_range;
       return true;
    }
-   if(have && show_range > min_range)
+   if(have)
    {
       m.valid = true;
       m.retraced_30 = true;
@@ -1214,18 +1243,6 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       m.t_origin = show_ot;
       m.t_tip = show_tt;
       m.range = show_range;
-      return true;
-   }
-   if(dir != 0 && MathAbs(origin - tip) > min_range)
-   {
-      m.valid = true;
-      m.retraced_30 = false;
-      m.dir = dir;
-      m.origin = origin;
-      m.tip = tip;
-      m.t_origin = t_origin;
-      m.t_tip = t_tip;
-      m.range = MathAbs(origin - tip);
       return true;
    }
    return false;
@@ -4106,9 +4123,14 @@ void DrawFib30Line(const MqlRates &rates[])
 
    if(ShowContinuedMoveZ)
    {
-      DrawHLineSegment(live + "Z0", h0a, h0b, price_100, ColorContinuedMove, STYLE_DOT, 1, "");
-      DrawHLineSegment(live + "Z1", h1a, h1b, price_0, ColorContinuedMove, STYLE_DOT, 1, "");
-      DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, ColorContinuedMove, STYLE_DOT, 1);
+      int zw = WidthContinuedMove;
+      if(zw < 1) zw = 1;
+      if(zw > 4) zw = 4;
+      // STYLE_DOT в MT5 почти всегда 1px; тире уважает толщину.
+      ENUM_LINE_STYLE zs = (zw > 1) ? STYLE_DASH : STYLE_DOT;
+      DrawHLineSegment(live + "Z0", h0a, h0b, price_100, ColorContinuedMove, zs, zw, "");
+      DrawHLineSegment(live + "Z1", h1a, h1b, price_0, ColorContinuedMove, zs, zw, "");
+      DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, ColorContinuedMove, zs, zw);
    }
    else
    {
