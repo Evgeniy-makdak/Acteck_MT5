@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.02                                                      |
+//|  ASmart 2.03                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.02 — продолженное движение, 30%, SL/TP/сейф"
-#property version   "2.02"
+#property description "ASmart 2.03 — продолженное движение, 30%, SL/TP/сейф"
+#property version   "2.03"
 
-#define EA_VERSION "2.02"
+#define EA_VERSION "2.03"
 
 
 //=========================
@@ -519,6 +519,10 @@ double g_lastImpulseRange = 0.0;
 
 double MinContinuedMoveRange();
 bool   FindContinuedMove(const MqlRates &rates[], SContinuedMove &m);
+bool   BarHasReversalMoment(const datetime t, const int direction);
+bool   PassPriceAction(const int direction, const MqlRates &bar, const MqlRates &prev);
+
+int    g_pdT1Trades = 0;
 
 // Dual-TF / Balance RSI / alerts runtime
 int      g_hRSI = INVALID_HANDLE;
@@ -1912,6 +1916,30 @@ bool ConfirmCandlePattern(const int direction, const MqlRates &bar, const MqlRat
               IsOutsideBarPattern(direction, bar, prev));
 
    return true;
+}
+
+bool BarHasReversalMoment(const datetime t, const int direction)
+{
+   if(t <= 0)
+      return false;
+   for(int i = 0; i < ArraySize(g_structZones); i++)
+   {
+      if(g_structZones[i].kind != SK_RM || !g_structZones[i].valid)
+         continue;
+      if(g_structZones[i].t1 != t)
+         continue;
+      if(direction != 0 && g_structZones[i].direction != direction)
+         continue;
+      return true;
+   }
+   return false;
+}
+
+bool PassPriceAction(const int direction, const MqlRates &bar, const MqlRates &prev)
+{
+   if(BarHasReversalMoment(bar.time, direction))
+      return true;
+   return ConfirmCandlePattern(direction, bar, prev);
 }
 
 bool PassSightAlignmentForBreakout(const int direction, string &why)
@@ -4543,10 +4571,11 @@ bool RangeHadConsolidation(const MqlRates &rates[], const datetime t_from, const
 }
 
 // --- PAT 01: ПД тип 1 ---
+// Скрины Снайпера: после ПД и отката ≥30% коррекционная зона НА экстремуме хода
+// (дно нисходящего ПД = поддержка BUY; верх восходящего = сопротивление SELL).
+// Вход — ретест этой зоны + РМ, не касание линии «30» и не пробой «за кончик».
 void DetectPattern_PD_T1(const MqlRates &rates[], const SPivot &swings[], const string tf_tag)
 {
-   // ПД = продолженный безоткатный ход → откат ≥30% ширины → зона входа ЗА экстремумом хода
-   // (на скрине: ход вверх, откат 30%+, поиск входа ВЫШЕ максимума).
    if(!ShowPullbackZones && !ShowAll12Patterns) return;
    SContinuedMove mv;
    if(!FindContinuedMove(rates, mv) || !mv.valid || !mv.retraced_30 || mv.cancelled_50)
@@ -4571,18 +4600,16 @@ void DetectPattern_PD_T1(const MqlRates &rates[], const SPivot &swings[], const 
 
    if(mv.dir > 0)
    {
-      // Ход вверх: зона поиска входа ВЫШЕ максимума (tip)
-      PushStructureZoneEx(SK_PD, PAT_PD_T1, 1, mv.t_tip, t2,
-                          mv.tip + zh, mv.tip, mv.range, corr_pct,
-                          StringFormat("%s BUY выше макс", PatternName(PAT_PD_T1)), true, tf_tag,
+      PushStructureZoneEx(SK_PD, PAT_PD_T1, -1, mv.t_tip, t2,
+                          mv.tip + zh * 0.25, mv.tip - zh, mv.range, corr_pct,
+                          StringFormat("%s SELL КЗ верха", PatternName(PAT_PD_T1)), true, tf_tag,
                           mv.origin, mv.tip);
    }
    else
    {
-      // Ход вниз: зона поиска входа НИЖЕ минимума (tip)
-      PushStructureZoneEx(SK_PD, PAT_PD_T1, -1, mv.t_tip, t2,
-                          mv.tip, mv.tip - zh, mv.range, corr_pct,
-                          StringFormat("%s SELL ниже мин", PatternName(PAT_PD_T1)), true, tf_tag,
+      PushStructureZoneEx(SK_PD, PAT_PD_T1, 1, mv.t_tip, t2,
+                          mv.tip + zh, mv.tip - zh * 0.25, mv.range, corr_pct,
+                          StringFormat("%s BUY КЗ дна", PatternName(PAT_PD_T1)), true, tf_tag,
                           mv.origin, mv.tip);
    }
 }
@@ -5156,21 +5183,11 @@ void UpdateDualTFStructures()
 {
    if(!UseVirtualTF)
       return;
-   // UI-режим: не плодить разметку M1/M15 на графике, если выкл.
-   if(!ShowSlowTFStructures && !RequireMTFConfluence)
-      return;
 
    int need = MathMax(400, StructureLookbackBars + 50);
    int depth = EffectiveSwingDepth();
 
-   if(ShowSlowTFStructures && FastTF != Timeframe)
-   {
-      MqlRates fast[];
-      ArraySetAsSeries(fast, true);
-      if(CopyRates(_Symbol, FastTF, 0, need, fast) >= 80)
-         RunPatternEngineOnRates(fast, ShortTFName(FastTF), MathMax(2, depth / 2));
-   }
-   else if(RequireMTFConfluence && FastTF != Timeframe)
+   if(FastTF != Timeframe)
    {
       MqlRates fast[];
       ArraySetAsSeries(fast, true);
@@ -5178,8 +5195,6 @@ void UpdateDualTFStructures()
          RunPatternEngineOnRates(fast, ShortTFName(FastTF), MathMax(2, depth / 2));
    }
 
-   if(!ShowSlowTFStructures && !RequireMTFConfluence)
-      return;
    if(SlowTF == Timeframe)
       return;
    MqlRates slow[];
@@ -5769,6 +5784,48 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
    return false;
 }
 
+void TryPDT1EntryFromRM(const MqlRates &rates[])
+{
+   if(ArraySize(rates) <= 2)
+      return;
+   const MqlRates bar = rates[1];
+   const MqlRates prev = rates[2];
+
+   SContinuedMove mv;
+   if(!FindContinuedMove(rates, mv) || !mv.valid || !mv.retraced_30 || mv.cancelled_50)
+      return;
+   if(bar.time <= mv.t_tip)
+      return;
+
+   const int want = (mv.dir > 0) ? -1 : 1;
+   if(!BarHasReversalMoment(bar.time, want))
+      return;
+   if(!PassPriceAction(want, bar, prev))
+      return;
+
+   double atr = 0.0;
+   GetBufferValue(g_hATR_Filter, 1, atr);
+   const double band = MathMax(8.0 * PointValue(), (atr > 0.0 ? MathMax(0.50, ZU_HeightATR_Mult) * atr : mv.range * 0.15));
+   if(mv.dir > 0)
+   {
+      if(bar.high + PointValue() < mv.tip - band)
+         return;
+      if(bar.close > mv.tip)
+         return;
+   }
+   else
+   {
+      if(bar.low - PointValue() > mv.tip + band)
+         return;
+      if(bar.close < mv.tip)
+         return;
+   }
+
+   double z_hi = (mv.dir > 0) ? (mv.tip + band * 0.25) : (mv.tip + band);
+   double z_lo = (mv.dir > 0) ? (mv.tip - band) : (mv.tip - band * 0.25);
+   ExecuteSignal("B", want, bar, z_hi, z_lo, g_pdT1Trades);
+}
+
 //=========================
 // Active zone: evaluate A/B
 //=========================
@@ -5798,7 +5855,7 @@ void ProcessActiveZone(const MqlRates &rates[])
       // Execute Signal A only when enabled; zone invalidation is independent from signal toggles
       if(g_EnableSignalA)
       {
-         if(ConfirmCandlePattern(dir, bar, prev))
+         if(PassPriceAction(dir, bar, prev))
             ExecuteSignal("A", dir, bar, g_zone.high, g_zone.low, g_zone.trades_done);
       }
 
@@ -5870,7 +5927,7 @@ void ProcessActiveZone(const MqlRates &rates[])
             dir = 0;
          }
 
-         if(dir != 0 && ConfirmCandlePattern(dir, bar, prev))
+         if(dir != 0 && PassPriceAction(dir, bar, prev))
             ExecuteSignal("B", dir, bar, g_zone.high, g_zone.low, g_zone.trades_done);
       }
    }
@@ -5935,7 +5992,7 @@ void ProcessBrokenZone(const MqlRates &rates[])
       bool confirm = (bar.close >= (g_broken.high + offset));
       if(confirm)
       {
-         if(ConfirmCandlePattern(1, bar, prev))
+         if(PassPriceAction(1, bar, prev))
          {
             ExecuteSignal("C", 1, bar, g_broken.high, g_broken.low, g_broken.trades_done);
             g_broken.retest_touched = false;
@@ -5947,7 +6004,7 @@ void ProcessBrokenZone(const MqlRates &rates[])
       bool confirm = (bar.close <= (g_broken.low - offset));
       if(confirm)
       {
-         if(ConfirmCandlePattern(-1, bar, prev))
+         if(PassPriceAction(-1, bar, prev))
          {
             ExecuteSignal("C", -1, bar, g_broken.high, g_broken.low, g_broken.trades_done);
             g_broken.retest_touched = false;
@@ -6374,6 +6431,7 @@ void ProcessOnBarClose()
    // IMPORTANT: process signals/invalidation BEFORE updating zone bounds to avoid absorbing the breakout bar into zone boundaries.
    ProcessActiveZone(rates);
    ProcessBrokenZone(rates);
+   TryPDT1EntryFromRM(rates);
    UpdateZones(rates);
    UpdateSwingLine(rates);
    AgeSignalObjects();
@@ -6425,7 +6483,7 @@ void ProcessIntrabar()
             if(g_lastSigA_time != bar.time)
             {
                int dir = breakout_up ? 1 : -1;
-               if(ConfirmCandlePattern(dir, bar, prev))
+               if(PassPriceAction(dir, bar, prev))
                   ExecuteSignal("A", dir, bar, g_zone.high, g_zone.low, g_zone.trades_done);
                g_lastSigA_time = bar.time;
             }
@@ -6453,7 +6511,7 @@ void ProcessIntrabar()
                   if(g_lastSigB_time != bar.time)
                   {
                      int dir = -1;
-                     if(ConfirmCandlePattern(dir, bar, prev))
+                     if(PassPriceAction(dir, bar, prev))
                         ExecuteSignal("B", dir, bar, g_zone.high, g_zone.low, g_zone.trades_done);
                      g_lastSigB_time = bar.time;
                   }
@@ -6463,7 +6521,7 @@ void ProcessIntrabar()
                   if(g_lastSigB_time != bar.time)
                   {
                      int dir = 1;
-                     if(ConfirmCandlePattern(dir, bar, prev))
+                     if(PassPriceAction(dir, bar, prev))
                         ExecuteSignal("B", dir, bar, g_zone.high, g_zone.low, g_zone.trades_done);
                      g_lastSigB_time = bar.time;
                   }
@@ -6514,7 +6572,7 @@ void ProcessIntrabar()
                bool confirm = (bar.close >= (g_broken.high + offset));
                if(confirm && g_lastSigC_time != bar.time)
                {
-                  if(ConfirmCandlePattern(1, bar, prev))
+                  if(PassPriceAction(1, bar, prev))
                      ExecuteSignal("C", 1, bar, g_broken.high, g_broken.low, g_broken.trades_done);
                   g_lastSigC_time = bar.time;
                   g_broken.retest_touched = false;
@@ -6525,7 +6583,7 @@ void ProcessIntrabar()
                bool confirm = (bar.close <= (g_broken.low - offset));
                if(confirm && g_lastSigC_time != bar.time)
                {
-                  if(ConfirmCandlePattern(-1, bar, prev))
+                  if(PassPriceAction(-1, bar, prev))
                      ExecuteSignal("C", -1, bar, g_broken.high, g_broken.low, g_broken.trades_done);
                   g_lastSigC_time = bar.time;
                   g_broken.retest_touched = false;
@@ -6579,6 +6637,7 @@ int OnInit()
    g_fib30_have     = false;
    g_fib30_retraced = false;
    g_lastImpulseRange = 0.0;
+   g_pdT1Trades = 0;
 
    ArrayResize(g_pc_states, 0);
    ArrayResize(g_probHistory, 0);
