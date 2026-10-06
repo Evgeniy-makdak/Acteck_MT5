@@ -1,6 +1,6 @@
 # Acteck v4.1 — алгоритм работы для начинающего трейдера
 
-> Актуальная версия EA: **ASmart 2.00**.  
+> Актуальная версия EA: **ASmart 2.01**.  
 > Шпаргалка: `UserGuide_Snayper_Pricel_EA_RU.txt` · PDF: `Acteck_v4.1_Manual_RU.pdf`  
 > Скорость: Inputs → **SpeedPreset** (SCALP / CALM / SWING) — на любой паре; смена → перерисовка.
 

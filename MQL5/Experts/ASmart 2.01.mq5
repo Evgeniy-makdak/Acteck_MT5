@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.00                                                      |
+//|  ASmart 2.01                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.00 — продолженное движение, 30%, SL/TP/сейф"
-#property version   "2.00"
+#property description "ASmart 2.01 — продолженное движение, 30%, SL/TP/сейф"
+#property version   "2.01"
 
-#define EA_VERSION "2.00"
+#define EA_VERSION "2.01"
 
 
 //=========================
@@ -1208,7 +1208,8 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       if(pb < complete_need)
          continue;
 
-      if(ImpulseQualified(size, MathAbs(i_origin - i_tip) + 1))
+      const bool qual = ImpulseQualified(size, MathAbs(i_origin - i_tip) + 1);
+      if(qual)
       {
          show_o = origin; show_ot = t_origin;
          show_t = tip;    show_tt = t_tip;
@@ -1216,6 +1217,12 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          show_dir = dir;
          show_itip = i_tip;
          have = true;
+      }
+      else if(pb < cancel_at)
+      {
+         // Откат 20% от ещё не импульса — не разворачивать: иначе большой ход
+         // режется на шум, а на графике остаётся предыдущий (уже отменённый) кусок.
+         continue;
       }
 
       if(dir < 0)
@@ -1301,8 +1308,11 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    m.retraced_30 = (m.retrace_pct + 1.0e-8 >= retrace_on * 100.0);
    m.cancelled_50 = (m.retrace_pct + 1.0e-8 >= cancel_at * 100.0);
 
-   if(m.cancelled_50 && live_ok && t_origin != show_ot)
+   // Отменённый 50% ход нельзя оставлять «рабочим», даже если новый live ещё без 20%.
+   if(m.cancelled_50)
    {
+      if(!live_ok || t_origin == show_ot)
+         return false;
       m.dir = dir;
       m.origin = origin;
       m.tip = tip;
@@ -1313,6 +1323,24 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       m.retraced_30 = false;
       m.cancelled_50 = false;
       m.retrace_pct = 0.0;
+      ext_h = m.tip;
+      ext_l = m.tip;
+      for(int i = m.i_tip - 1; i >= 1; i--)
+      {
+         if(rates[i].high > ext_h) ext_h = rates[i].high;
+         if(rates[i].low  < ext_l) ext_l = rates[i].low;
+      }
+      if(m.range > PointValue())
+      {
+         if(m.dir > 0)
+            m.retrace_pct = 100.0 * (m.tip - ext_l) / m.range;
+         else
+            m.retrace_pct = 100.0 * (ext_h - m.tip) / m.range;
+      }
+      m.retraced_30 = (m.retrace_pct + 1.0e-8 >= retrace_on * 100.0);
+      m.cancelled_50 = (m.retrace_pct + 1.0e-8 >= cancel_at * 100.0);
+      if(m.cancelled_50)
+         return false;
    }
 
    g_lastImpulseRange = m.range;
