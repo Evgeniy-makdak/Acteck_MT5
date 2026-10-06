@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.05                                                      |
+//|  ASmart 2.06                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.05 — продолженное движение, 30%, SL/TP/сейф"
-#property version   "2.05"
+#property description "ASmart 2.06 — продолженное движение, 30%, SL/TP/сейф"
+#property version   "2.06"
 
-#define EA_VERSION "2.05"
+#define EA_VERSION "2.06"
 
 
 //=========================
@@ -2869,6 +2869,28 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
    }
 }
 
+void PrunePastDecisionMarks()
+{
+   if(KeepSignalHistory)
+      return;
+   datetime keep_from = iTime(_Symbol, Timeframe, 1);
+   if(keep_from <= 0)
+      keep_from = iTime(_Symbol, Timeframe, 0);
+   if(keep_from <= 0)
+      return;
+   const string pfx = Prefix() + "SIG_";
+   int total = ObjectsTotal(0, 0, -1);
+   for(int i = total - 1; i >= 0; i--)
+   {
+      string name = ObjectName(0, i, 0, -1);
+      if(StringFind(name, pfx) != 0)
+         continue;
+      datetime t = (datetime)ObjectGetInteger(0, name, OBJPROP_TIME, 0);
+      if(t > 0 && t < keep_from)
+         ObjectDelete(0, name);
+   }
+}
+
 void AgeSignalObjects()
 {
    if(!FadeOldMarkings)
@@ -4937,88 +4959,45 @@ void DetectPattern_Cascades(const MqlRates &rates[], const SPivot &swings[], con
    }
 }
 
-void DrawRMMark(const string name, const datetime t1, const datetime t2,
-                const double hi, const double lo, const int dir, const double ink)
-{
-   const color rm = InkColor((dir > 0) ? ColorRM_Buy : ColorRM_Sell, ink);
-   ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, hi, t2, lo);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, rm);
-   ObjectSetInteger(0, name, OBJPROP_STYLE, (ink < 0.65) ? STYLE_DOT : STYLE_SOLID);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, (ink < 0.65) ? 1 : 2);
-   ObjectSetInteger(0, name, OBJPROP_FILL, false);
-   ObjectSetInteger(0, name, OBJPROP_BACK, false);
-   ObjectSetInteger(0, name, OBJPROP_ZORDER, 20);
-   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-}
-
 void DetectReversalMoments(const MqlRates &rates[], const string tf_tag)
 {
-   if(!ShowReversalMoments) return;
+   // Только последняя закрытая свеча. Исторические рамки не рисуем и не пересчитываем
+   // от текущего ATR — иначе квадрат вспыхивает задним числом.
    const int n = ArraySize(rates);
    const int bars = MathMax(2, RM_ImpulseBars);
-   if(n < bars + 5) return;
+   const int shift = 1;
+   if(n < shift + bars + 2) return;
 
    double atr = 0.0;
-   if(!GetBufferValue(g_hATR_Filter, 1, atr) || atr <= 0.0) return;
+   if(!GetBufferValue(g_hATR_Filter, shift, atr) || atr <= 0.0) return;
 
-   // Несколько последних остановок. Свежие — яркие, старые бледнеют и пропадают.
-   const int sec = PeriodSeconds(Timeframe);
-   int by_time = 48;
-   if(sec > 0 && MarkHideAfterHours > 0)
-      by_time = MarkHideAfterHours * 3600 / sec + bars + 2;
-   if(by_time < 48) by_time = 48;
-   const int scan = MathMin(n - bars - 2, by_time);
-   bool pushed = false;
-   int drawn = 0;
-   for(int shift = 1; shift <= scan; shift++)
+   double up_move = 0.0, dn_move = 0.0;
+   double win_hi = rates[shift].high, win_lo = rates[shift].low;
+   for(int i = shift + 1; i <= shift + bars; i++)
    {
-      double up_move = 0.0, dn_move = 0.0;
-      double win_hi = rates[shift].high, win_lo = rates[shift].low;
-      for(int i = shift + 1; i <= shift + bars; i++)
-      {
-         up_move += MathMax(0.0, rates[i].close - rates[i].open);
-         dn_move += MathMax(0.0, rates[i].open - rates[i].close);
-         if(rates[i].high > win_hi) win_hi = rates[i].high;
-         if(rates[i].low < win_lo) win_lo = rates[i].low;
-      }
-
-      MqlRates stall = rates[shift];
-      const double body = MathAbs(stall.close - stall.open);
-      if(body > RM_StallBodyATR_Max * atr) continue;
-
-      int dir = 0;
-      if(up_move >= RM_ImpulseATR_Mult * atr && up_move > dn_move) dir = -1;
-      else if(dn_move >= RM_ImpulseATR_Mult * atr && dn_move > up_move) dir = 1;
-      else continue;
-
-      // Продажа — остановка в зоне вершины импульса, покупка — в зоне дна.
-      // Допуск не 1 пункт: иначе доджи на 2–3 пункта ниже хая никогда не рамка (шум котировки, не Снайпер).
-      const double peak_pad = MathMax(8.0 * PointValue(), MathMax(0.0, RM_PeakATR_Pad) * atr);
-      if(dir < 0 && stall.high + peak_pad < win_hi) continue;
-      if(dir > 0 && stall.low - peak_pad > win_lo) continue;
-
-      double ink = 1.0;
-      if(!MarkInk(stall.time, ink))
-         break;
-
-      const bool on_chart = (StringLen(tf_tag) == 0 || tf_tag == ShortTFName(Timeframe));
-      if(!pushed)
-      {
-         PushStructureZoneEx(SK_RM, PAT_NONE, dir, stall.time, stall.time + (datetime)sec,
-                             stall.high, stall.low, 0.0, 0.0,
-                             (dir > 0) ? "РМ ПОКУПКА" : "РМ ПРОДАЖА", true, tf_tag);
-         pushed = true;
-      }
-      else if(on_chart || ShowSlowTFStructures)
-      {
-         DrawRMMark(Prefix() + "STR_RMH_" + tf_tag + "_" + TimeToObjectId(stall.time),
-                    stall.time, stall.time + (datetime)sec,
-                    stall.high, stall.low, dir, ink);
-      }
-      drawn++;
-      if(drawn >= 8)
-         break;
+      up_move += MathMax(0.0, rates[i].close - rates[i].open);
+      dn_move += MathMax(0.0, rates[i].open - rates[i].close);
+      if(rates[i].high > win_hi) win_hi = rates[i].high;
+      if(rates[i].low < win_lo) win_lo = rates[i].low;
    }
+
+   MqlRates stall = rates[shift];
+   const double body = MathAbs(stall.close - stall.open);
+   if(body > RM_StallBodyATR_Max * atr) return;
+
+   int dir = 0;
+   if(up_move >= RM_ImpulseATR_Mult * atr && up_move > dn_move) dir = -1;
+   else if(dn_move >= RM_ImpulseATR_Mult * atr && dn_move > up_move) dir = 1;
+   else return;
+
+   const double peak_pad = MathMax(8.0 * PointValue(), MathMax(0.0, RM_PeakATR_Pad) * atr);
+   if(dir < 0 && stall.high + peak_pad < win_hi) return;
+   if(dir > 0 && stall.low - peak_pad > win_lo) return;
+
+   const int sec = PeriodSeconds(Timeframe);
+   PushStructureZoneEx(SK_RM, PAT_NONE, dir, stall.time, stall.time + (datetime)sec,
+                       stall.high, stall.low, 0.0, 0.0,
+                       (dir > 0) ? "РМ ПОКУПКА" : "РМ ПРОДАЖА", true, tf_tag);
 }
 
 void DetectReversalMoments(const MqlRates &rates[])
@@ -5540,6 +5519,11 @@ void BuildSLTP(const int direction, const double entry, const double zone_high, 
 
 bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal_bar, const double zone_high, const double zone_low, int &trades_done)
 {
+   datetime last_closed = iTime(_Symbol, Timeframe, 1);
+   datetime cur_open = iTime(_Symbol, Timeframe, 0);
+   if(signal_bar.time != last_closed && signal_bar.time != cur_open)
+      return false;
+
    const bool reentries_ok = (trades_done < MaxTradesPerZone());
 
    // entry at market (current)
@@ -6461,6 +6445,7 @@ void ProcessOnBarClose()
    UpdateZones(rates);
    UpdateSwingLine(rates);
    AgeSignalObjects();
+   PrunePastDecisionMarks();
 }
 
 void ProcessIntrabar()
