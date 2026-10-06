@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.01                                                      |
+//|  ASmart 2.02                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.01 — продолженное движение, 30%, SL/TP/сейф"
-#property version   "2.01"
+#property description "ASmart 2.02 — продолженное движение, 30%, SL/TP/сейф"
+#property version   "2.02"
 
-#define EA_VERSION "2.01"
+#define EA_VERSION "2.02"
 
 
 //=========================
@@ -1211,12 +1211,25 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       const bool qual = ImpulseQualified(size, MathAbs(i_origin - i_tip) + 1);
       if(qual)
       {
-         show_o = origin; show_ot = t_origin;
-         show_t = tip;    show_tt = t_tip;
-         show_range = size;
-         show_dir = dir;
-         show_itip = i_tip;
-         have = true;
+         bool take = true;
+         if(have && dir != show_dir && show_range > PointValue())
+         {
+            const double parent_retrace = (show_dir > 0)
+                                          ? ((show_t - tip) / show_range)
+                                          : ((tip - show_t) / show_range);
+            // Встречный кусок внутри 50% родителя — коррекция, не новый ход.
+            if(parent_retrace + 1.0e-8 < cancel_at)
+               take = false;
+         }
+         if(take)
+         {
+            show_o = origin; show_ot = t_origin;
+            show_t = tip;    show_tt = t_tip;
+            show_range = size;
+            show_dir = dir;
+            show_itip = i_tip;
+            have = true;
+         }
       }
       else if(pb < cancel_at)
       {
