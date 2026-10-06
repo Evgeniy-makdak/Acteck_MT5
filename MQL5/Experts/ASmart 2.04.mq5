@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.03                                                      |
+//|  ASmart 2.04                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.03 — продолженное движение, 30%, SL/TP/сейф"
-#property version   "2.03"
+#property description "ASmart 2.04 — продолженное движение, 30%, SL/TP/сейф"
+#property version   "2.04"
 
-#define EA_VERSION "2.03"
+#define EA_VERSION "2.04"
 
 
 //=========================
@@ -516,6 +516,7 @@ struct SContinuedMove
 };
 
 double g_lastImpulseRange = 0.0;
+int    g_lastImpulseDir   = 0;
 
 double MinContinuedMoveRange();
 bool   FindContinuedMove(const MqlRates &rates[], SContinuedMove &m);
@@ -1135,6 +1136,7 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    m.range = 0.0;
    m.retrace_pct = 0.0;
    g_lastImpulseRange = 0.0;
+   g_lastImpulseDir   = 0;
 
    const int nr = ArraySize(rates);
    if(nr < 30)
@@ -1361,6 +1363,7 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    }
 
    g_lastImpulseRange = m.range;
+   g_lastImpulseDir   = m.dir;
    return true;
 }
 
@@ -2815,7 +2818,7 @@ void ClearSignalObjectsIfNeeded()
    }
 }
 
-void VisualizeSignal(const string sig, const int direction, const MqlRates &bar, const double entry, const double sl, const double tp, const string status)
+void VisualizeSignal(const string sig, const int direction, const MqlRates &bar, const double entry, const double sl, const double tp, const string status, const string chart_note)
 {
    if(!ShowEntryMarker)
       return;
@@ -2824,15 +2827,15 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
 
    color c = (direction > 0) ? ColorBuyMarker : ColorSellMarker;
    color fill = ToARGB(c, 40);
+   const bool warn = (StringFind(chart_note, "против") >= 0 || StringFind(chart_note, "запрещает") >= 0);
+   color note_c = warn ? ColorFib30Old : c;
 
    int sec = PeriodSeconds(Timeframe);
    datetime t1 = bar.time;
    datetime t2 = bar.time + (datetime)sec;
 
-	// For object names we need a stable unique id.
 	string base = Prefix() + "SIG_" + TimeToObjectId(bar.time) + "_" + sig;
 
-   // Компактный маркер: без «простыни» SL/TP на графике
    DrawRect(base + "_R", t1, bar.high, t2, bar.low, fill, true, true);
    ObjectSetString(0, base + "_R", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)c));
 
@@ -2843,6 +2846,16 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
    ObjectSetInteger(0, base + "_T", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, base + "_T", OBJPROP_ZORDER, 90);
    ObjectSetString(0, base + "_T", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)c));
+
+   if(StringLen(chart_note) > 0)
+   {
+      double note_price = (direction > 0) ? (bar.low - 28 * PointValue()) : (bar.high + 28 * PointValue());
+      DrawText(base + "_N", t1, note_price, chart_note, note_c,
+               (direction > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
+      ObjectSetInteger(0, base + "_N", OBJPROP_FONTSIZE, 8);
+      ObjectSetInteger(0, base + "_N", OBJPROP_ZORDER, 90);
+      ObjectSetString(0, base + "_N", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)note_c));
+   }
 
    if(ShowArrows)
    {
@@ -2875,7 +2888,7 @@ void AgeSignalObjects()
       }
       if(ink >= 0.98)
          continue;
-      if(StringFind(name, "_T") >= 0 && ink < 0.45)
+      if((StringFind(name, "_T") >= 0 || StringFind(name, "_N") >= 0) && ink < 0.45)
       {
          ObjectDelete(0, name);
          continue;
@@ -5698,7 +5711,17 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
       vis_bar.low  = entry - pad;
    }
 
-   VisualizeSignal(sig, direction, vis_bar, entry, sl, tp, status);
+   string chart_note = (direction > 0) ? "покупка" : "продажа";
+   if(g_lastImpulseDir != 0)
+      chart_note += (direction == g_lastImpulseDir) ? " | по ходу" : " | против хода";
+   if(g_sightActive && g_sightDirection != 0 && g_sightDirection != direction)
+      chart_note += " | против прицела";
+   if(!fear_ok)
+      chart_note += " | индекс страха запрещает";
+   else
+      chart_note += StringFormat(" | страх %d", fear);
+
+   VisualizeSignal(sig, direction, vis_bar, entry, sl, tp, status, chart_note);
 
    // Алерт ТОЛЬКО при появлении стрелки входа (не на зоны/прицел/сессии/блокировки)
    string msg = sig + " " + (direction > 0 ? "BUY" : "SELL") + " " + _Symbol;
@@ -6637,6 +6660,7 @@ int OnInit()
    g_fib30_have     = false;
    g_fib30_retraced = false;
    g_lastImpulseRange = 0.0;
+   g_lastImpulseDir   = 0;
    g_pdT1Trades = 0;
 
    ArrayResize(g_pc_states, 0);

@@ -1,7 +1,7 @@
-ASmart 2.03 — установка
+ASmart 2.04 — установка
 ========================
-1) MetaEditor: ASmart 2.03.mq5 → F7 (Compile)
-2) Снять с графика ASmart 2.02, перетащить «ASmart 2.03»
+1) MetaEditor: ASmart 2.04.mq5 → F7 (Compile)
+2) Снять с графика ASmart 2.03, перетащить «ASmart 2.04»
 3) Inputs → Load: Acteck_v4.1_<PAIR>_calm|scalp|swing_H1.set
 4) Обучение: TradeEnabled=false
 
