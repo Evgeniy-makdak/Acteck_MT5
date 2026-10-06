@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  Acteck v 4.12                                                    |
+//|  ASmart 2.00                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "Acteck v 4.12 — Sniper structures: ЗУ/ПД/каскад/РМ, speed, sessions."
-#property version   "4.12"
+#property description "ASmart 2.00 — продолженное движение, 30%, SL/TP/сейф"
+#property version   "2.00"
 
-#define EA_VERSION "4.12"
+#define EA_VERSION "2.00"
 
 
 //=========================
@@ -138,9 +138,10 @@ input bool                 UseBE                = true;
 input int                  BE_Trigger           = 5;      // additional points after PartialClose step1 (only if PartialClose_On=true)
 input int                  BE_Offset            = 5;      // points
 
-input bool                 UseTS                = false;
-input int                  TS_Start             = 150;    // points
-input int                  TS_Step              = 50;     // points
+input bool                 UseTS                = true;
+input int                  TS_Start             = 0;      // пунктов до старта трейла; 0 = после сейфа
+input int                  TS_Step              = 50;     // запас, если TrailATR=0
+input double               TrailATR             = 0.25;   // шаг трейла в ATR (0 = TS_Step пункты)
 
 input bool                 PartialClose_On      = true;
 input int                  PC_Step1             = 150;    // points
@@ -154,7 +155,7 @@ input int                  MaxPositions         = 1;
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "Acteck";
+input string               CommentPrefix        = "ASmart";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -234,7 +235,8 @@ input bool                 ShowFearIndexHUD     = true;   // число спра
 input int                  FearIndexPeriod      = 14;     // период RSI-базы индекса
 input bool                 FilterByFearIndex    = true;   // на страхе не продаём, на жадности не покупаем
 input bool                 AutoTPByFearIndex    = true;   // TP = SL × множитель зоны индекса
-input bool                 UseSafeRule          = true;   // сейф: первая фиксация на расстоянии = стоп (1R)
+input bool                 UseSafeRule          = true;   // сейф: 50% на min(1R, 0.30×импульс) + BE
+input double               SafeImpulseK         = 0.30;   // доля импульса для сейфа (не дальше 1R)
 input bool                 ScaleLotBySetupQuality = false; // старый масштаб лота по «зрелости» сетапа (не индекс)
 input int                  SetupQualityMinToTrade = 0;    // 0 = выкл.; порог зрелости сетапа (не индекс страха)
 input int                  FearHistoryLen       = 24;     // точки истории для ломаной
@@ -275,10 +277,14 @@ input int                  WidthContinuedMove   = 2;      // толщина пу
 input ENUM_SPEED_PRESET    SpeedPreset          = SPEED_CALM; // скальп / спокойный / свинги — для ЛЮБОЙ пары
 input int                  IndicatorSpeed       = 8;      // глубина, если SpeedPreset=CUSTOM (2..60)
 input int                  StructureLookbackBars = 250;    // баров истории для структур
-input double               PD_MinCorrectionPct  = 30.0;   // мин. откат от ширины хода, %
-input double               PD_MinImpulseATR     = 3.0;    // мин. высота импульса в ATR (не одной свечи)
+input double               PD_MinCorrectionPct  = 30.0;   // зона поиска / вход: откат ≥ этого % ширины
+input double               PD_CompletePullbackPct = 20.0; // первый значимый откат — фиксация хода, %
+input double               PD_CancelRetracePct  = 50.0;   // глубже — сетап снят
+input double               PD_MinImpulseATR     = 2.5;    // мин. высота всего импульса в ATR
 input int                  PD_MinImpulseBars    = 6;      // мин. баров в импульсе
 input int                  PD_MinImpulsePoints  = 0;      // доп. пол в пунктах; 0 = только ATR+бары
+input double               SL_AtrPad            = 0.15;   // SL за зоной, доли ATR
+input double               TP_ImpulseK          = 1.00;   // TP = вход ± доля ширины импульса (если не AutoTP)
 input int                  PD_RetestMaxHours    = 6;      // макс. часов до ретеста ПД
 input double               CascadeMaxBreakoutPct = 100.0; // каскад: пробой > этого % от X — отмена
 input double               ZU_HeightATR_Mult    = 0.35;   // высота ЗУ в долях ATR
@@ -497,14 +503,19 @@ int            g_structSeq = 0;
 struct SContinuedMove
 {
    bool     valid;
-   bool     retraced_30; // откат ≥ порога уже случился — можно искать вход за экстремумом
-   int      dir;         // +1 рост, -1 падение
+   bool     retraced_30; // откат ≥ 30% — можно искать вход
+   bool     cancelled_50;
+   int      dir;         // +1 рост → BUY на откате; -1 падение → SELL
    double   origin;      // 100% — начало хода
    double   tip;         // 0%  — экстремум, откуда пошёл откат
    datetime t_origin;
    datetime t_tip;
+   int      i_tip;
    double   range;
+   double   retrace_pct;
 };
+
+double g_lastImpulseRange = 0.0;
 
 double MinContinuedMoveRange();
 bool   FindContinuedMove(const MqlRates &rates[], SContinuedMove &m);
@@ -524,6 +535,7 @@ double   g_fib30_price    = 0.0;
 datetime g_fib30_t1       = 0;
 datetime g_fib30_t2       = 0;
 bool     g_fib30_have     = false;
+bool     g_fib30_retraced = false;
 
 // Forward declarations (MQL5: call sites before definitions)
 string ShortTFName(const ENUM_TIMEFRAMES tf);
@@ -1109,18 +1121,24 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
 {
    m.valid = false;
    m.retraced_30 = false;
+   m.cancelled_50 = false;
    m.dir = 0;
    m.origin = 0.0;
    m.tip = 0.0;
    m.t_origin = 0;
    m.t_tip = 0;
+   m.i_tip = 0;
    m.range = 0.0;
+   m.retrace_pct = 0.0;
+   g_lastImpulseRange = 0.0;
 
    const int nr = ArraySize(rates);
    if(nr < 30)
       return false;
 
-   const double retrace_need = MathMax(0.05, PD_MinCorrectionPct / 100.0);
+   const double complete_need = MathMax(0.08, PD_CompletePullbackPct / 100.0);
+   const double retrace_on = MathMax(complete_need, PD_MinCorrectionPct / 100.0);
+   const double cancel_at = MathMax(retrace_on + 0.05, PD_CancelRetracePct / 100.0);
    const int look = MathMin(nr, MathMax(50, StructureLookbackBars));
    const int oldest = look - 1;
    const double seed = SeedContinuedMoveRange();
@@ -1137,9 +1155,9 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    double show_o = 0.0, show_t = 0.0;
    datetime show_ot = 0, show_tt = 0;
    double show_range = 0.0;
-   int show_dir = 0;
+   int show_dir = 0, show_itip = 0;
 
-   for(int i = oldest - 1; i >= 0; i--)
+   for(int i = oldest - 1; i >= 1; i--)
    {
       const double h = rates[i].high;
       const double l = rates[i].low;
@@ -1170,37 +1188,33 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       {
          if(l < tip)
          {
-            tip = l;
-            t_tip = tm;
-            i_tip = i;
+            tip = l; t_tip = tm; i_tip = i;
             continue;
          }
-         const double range = origin - tip;
-         if(range < seed * 0.5 || (h - tip) < retrace_need * range)
-            continue;
       }
       else
       {
          if(h > tip)
          {
-            tip = h;
-            t_tip = tm;
-            i_tip = i;
+            tip = h; t_tip = tm; i_tip = i;
             continue;
          }
-         const double range_up = tip - origin;
-         if(range_up < seed * 0.5 || (tip - l) < retrace_need * range_up)
-            continue;
       }
 
-      const double done_range = MathAbs(origin - tip);
-      const int done_bars = MathAbs(i_origin - i_tip) + 1;
-      if(ImpulseQualified(done_range, done_bars))
+      const double size = MathAbs(origin - tip);
+      if(size < seed * 0.5)
+         continue;
+      const double pb = (dir > 0) ? ((tip - l) / size) : ((h - tip) / size);
+      if(pb < complete_need)
+         continue;
+
+      if(ImpulseQualified(size, MathAbs(i_origin - i_tip) + 1))
       {
          show_o = origin; show_ot = t_origin;
          show_t = tip;    show_tt = t_tip;
-         show_range = done_range;
+         show_range = size;
          show_dir = dir;
+         show_itip = i_tip;
          have = true;
       }
 
@@ -1218,34 +1232,91 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       }
    }
 
-   const double live_range = MathAbs(origin - tip);
-   const int live_bars = MathAbs(i_origin - i_tip) + 1;
-   // Актуальный ход справа, если он уже импульс. Иначе — последний квалифицированный после 30%.
-   if(dir != 0 && ImpulseQualified(live_range, live_bars))
-   {
-      m.valid = true;
-      m.retraced_30 = false;
-      m.dir = dir;
-      m.origin = origin;
-      m.tip = tip;
-      m.t_origin = t_origin;
-      m.t_tip = t_tip;
-      m.range = live_range;
-      return true;
-   }
+   bool live_ok = (dir != 0 && ImpulseQualified(MathAbs(origin - tip), MathAbs(i_origin - i_tip) + 1));
+
    if(have)
    {
       m.valid = true;
-      m.retraced_30 = true;
       m.dir = show_dir;
       m.origin = show_o;
       m.tip = show_t;
       m.t_origin = show_ot;
       m.t_tip = show_tt;
+      m.i_tip = show_itip;
       m.range = show_range;
-      return true;
    }
-   return false;
+   else if(live_ok)
+   {
+      m.valid = true;
+      m.dir = dir;
+      m.origin = origin;
+      m.tip = tip;
+      m.t_origin = t_origin;
+      m.t_tip = t_tip;
+      m.i_tip = i_tip;
+      m.range = MathAbs(origin - tip);
+   }
+   else
+      return false;
+
+   double ext_h = m.tip, ext_l = m.tip;
+   int i_eh = m.i_tip, i_el = m.i_tip;
+   for(int i = m.i_tip - 1; i >= 1; i--)
+   {
+      if(rates[i].high > ext_h) { ext_h = rates[i].high; i_eh = i; }
+      if(rates[i].low  < ext_l) { ext_l = rates[i].low;  i_el = i; }
+   }
+
+   // Пауза кончилась продолжением тренда: новый экстремум за кончиком → тот же ход, tip едет дальше.
+   // Старая «30» больше не рабочая (это не разворотный уровень).
+   if(m.dir > 0 && ext_h > m.tip)
+   {
+      m.tip = ext_h;
+      m.i_tip = i_eh;
+      m.t_tip = rates[i_eh].time;
+      m.range = MathAbs(m.origin - m.tip);
+   }
+   else if(m.dir < 0 && ext_l < m.tip)
+   {
+      m.tip = ext_l;
+      m.i_tip = i_el;
+      m.t_tip = rates[i_el].time;
+      m.range = MathAbs(m.origin - m.tip);
+   }
+
+   ext_h = m.tip;
+   ext_l = m.tip;
+   for(int i = m.i_tip - 1; i >= 1; i--)
+   {
+      if(rates[i].high > ext_h) ext_h = rates[i].high;
+      if(rates[i].low  < ext_l) ext_l = rates[i].low;
+   }
+   if(m.range > PointValue())
+   {
+      if(m.dir > 0)
+         m.retrace_pct = 100.0 * (m.tip - ext_l) / m.range;
+      else
+         m.retrace_pct = 100.0 * (ext_h - m.tip) / m.range;
+   }
+   m.retraced_30 = (m.retrace_pct + 1.0e-8 >= retrace_on * 100.0);
+   m.cancelled_50 = (m.retrace_pct + 1.0e-8 >= cancel_at * 100.0);
+
+   if(m.cancelled_50 && live_ok && t_origin != show_ot)
+   {
+      m.dir = dir;
+      m.origin = origin;
+      m.tip = tip;
+      m.t_origin = t_origin;
+      m.t_tip = t_tip;
+      m.i_tip = i_tip;
+      m.range = MathAbs(origin - tip);
+      m.retraced_30 = false;
+      m.cancelled_50 = false;
+      m.retrace_pct = 0.0;
+   }
+
+   g_lastImpulseRange = m.range;
+   return true;
 }
 
 //=========================
@@ -4049,7 +4120,7 @@ void Fib30ArchiveCurrent()
 {
    if(!g_fib30_have || g_fib30_t1 == 0 || g_fib30_t2 == 0)
       return;
-   const string name = Prefix() + "FIB30H_" + TimeToObjectId(g_fib30_origin_t);
+   const string name = Prefix() + "FIB30H_" + TimeToObjectId(g_fib30_origin_t) + "_" + TimeToObjectId(g_fib30_t2);
    const string txt  = name + "_T";
    const color faded = MixContrast50(ColorFib30Old);
    const string day  = IntegerToString((long)DayFloor(TimeCurrent()));
@@ -4071,6 +4142,7 @@ void DrawFib30Line(const MqlRates &rates[])
       DeleteObjectsWithPrefix(live);
       DeleteObjectsWithPrefix(pfx + "H_");
       g_fib30_have = false;
+      g_fib30_retraced = false;
       return;
    }
 
@@ -4079,14 +4151,21 @@ void DrawFib30Line(const MqlRates &rates[])
                         && MathAbs(mv.origin - mv.tip) > MinContinuedMoveRange()
                         && mv.t_origin != mv.t_tip;
 
-   if(g_fib30_have && have_mv && mv.t_origin != g_fib30_origin_t)
-      Fib30ArchiveCurrent();
+   if(g_fib30_have && have_mv)
+   {
+      const double new30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (mv.origin - mv.tip);
+      const bool origin_chg = (mv.t_origin != g_fib30_origin_t);
+      const bool spent_30 = g_fib30_retraced && MathAbs(new30 - g_fib30_price) > 3.0 * PointValue();
+      if(origin_chg || spent_30)
+         Fib30ArchiveCurrent();
+   }
 
    Fib30HistoryPurge(have_mv);
 
    if(!have_mv)
    {
       DeleteObjectsWithPrefix(live);
+      g_fib30_retraced = false;
       return;
    }
 
@@ -4153,6 +4232,7 @@ void DrawFib30Line(const MqlRates &rates[])
    g_fib30_t1       = t30a;
    g_fib30_t2       = t30b;
    g_fib30_have     = true;
+   g_fib30_retraced = mv.retraced_30;
 
    if(ObjExists(pfx)) ObjectDelete(0, pfx);
    if(ObjExists(pfx + "_BAND")) ObjectDelete(0, pfx + "_BAND");
@@ -4428,7 +4508,7 @@ void DetectPattern_PD_T1(const MqlRates &rates[], const SPivot &swings[], const 
    // (на скрине: ход вверх, откат 30%+, поиск входа ВЫШЕ максимума).
    if(!ShowPullbackZones && !ShowAll12Patterns) return;
    SContinuedMove mv;
-   if(!FindContinuedMove(rates, mv) || !mv.valid || !mv.retraced_30)
+   if(!FindContinuedMove(rates, mv) || !mv.valid || !mv.retraced_30 || mv.cancelled_50)
       return;
    if(mv.range < MinContinuedMoveRange())
       return;
@@ -5254,7 +5334,13 @@ int EffectiveSafeStep1Points(const double entry, const double sl)
       return PC_Step1;
    int one_r = (int)MathRound(MathAbs(entry - sl) / p);
    if(one_r < 1)
-      return PC_Step1;
+      one_r = PC_Step1;
+   if(g_lastImpulseRange > p && SafeImpulseK > 0.0)
+   {
+      int by_imp = (int)MathRound(SafeImpulseK * g_lastImpulseRange / p);
+      if(by_imp > 0 && by_imp < one_r)
+         one_r = by_imp;
+   }
    return one_r;
 }
 
@@ -5341,8 +5427,17 @@ void BuildSLTP(const int direction, const double entry, const double zone_high, 
    {
       sl = (direction > 0) ? (zone_low - SL_Offset * p) : (zone_high + SL_Offset * p);
    }
+   double atr_sl = 0.0;
+   GetBufferValue(g_hATR_Filter, 1, atr_sl);
+   if(atr_sl > 0.0 && SL_AtrPad > 0.0)
+   {
+      if(direction > 0)
+         sl -= SL_AtrPad * atr_sl;
+      else
+         sl += SL_AtrPad * atr_sl;
+   }
 
-   // TP: по методичке индекс страха задаёт цель 1:1 / 1:2 / 1:3 от стопа
+   // TP: импульс (полное продолжение) или индекс страха 1R/2R/3R
    if(AutoTPByFearIndex && TP_Mode == TP_FIXED)
    {
       double rr = FearIndexRewardMult(ComputeFearIndex());
@@ -5350,6 +5445,11 @@ void BuildSLTP(const int direction, const double entry, const double zone_high, 
       if(sl_dist <= 0.0)
          sl_dist = SL_Points * p;
       tp = (direction > 0) ? (entry + rr * sl_dist) : (entry - rr * sl_dist);
+   }
+   else if(g_lastImpulseRange > p && TP_ImpulseK > 0.0)
+   {
+      tp = (direction > 0) ? (entry + TP_ImpulseK * g_lastImpulseRange)
+                           : (entry - TP_ImpulseK * g_lastImpulseRange);
    }
    else if(TP_Mode == TP_FIXED)
    {
@@ -6041,14 +6141,34 @@ void ManagePositions()
          }
       }
 
-      // Trailing stop
-      if(UseTS && profit_points >= TS_Start)
+      // Trailing: после сейфа (или TS_Start пунктов) шаг TrailATR × ATR
+      bool trail_ok = UseTS;
+      if(trail_ok && UseSafeRule && PartialClose_On)
       {
+         int pc_idx_tr = FindPCIndex(ticket);
+         trail_ok = (pc_idx_tr >= 0 && (g_pc_states[pc_idx_tr].flags & 1) != 0);
+      }
+      else if(trail_ok && TS_Start > 0)
+         trail_ok = (profit_points >= TS_Start);
+
+      if(trail_ok)
+      {
+         double atr_tr = 0.0;
+         GetBufferValue(g_hATR_Filter, 1, atr_tr);
+         double step_tr = (TrailATR > 0.0 && atr_tr > 0.0) ? (TrailATR * atr_tr) : (TS_Step * point);
          double new_sl = sl;
          if(type == POSITION_TYPE_BUY)
-            new_sl = bid - TS_Step * point;
+         {
+            new_sl = bid - step_tr;
+            if(UseSafeRule)
+               new_sl = MathMax(new_sl, open_price);
+         }
          else
-            new_sl = ask + TS_Step * point;
+         {
+            new_sl = ask + step_tr;
+            if(UseSafeRule)
+               new_sl = MathMin(new_sl, open_price);
+         }
 
          new_sl = NormalizePrice(new_sl);
 
@@ -6115,8 +6235,14 @@ void ManagePositions()
                }
             }
 
-            // step2
-            if(!(flags & 2) && profit_points >= PC_Step2)
+            int pc2_pts = PC_Step2;
+            if(g_lastImpulseRange > point && TP_ImpulseK > 0.0)
+            {
+               int by_h = (int)MathRound(0.50 * g_lastImpulseRange / point);
+               if(by_h > pc2_pts)
+                  pc2_pts = by_h;
+            }
+            if(!(flags & 2) && profit_points >= pc2_pts)
             {
                // refresh volume
                if(PositionSelectByTicket(ticket))
@@ -6410,6 +6536,8 @@ int OnInit()
    g_fib30_t1       = 0;
    g_fib30_t2       = 0;
    g_fib30_have     = false;
+   g_fib30_retraced = false;
+   g_lastImpulseRange = 0.0;
 
    ArrayResize(g_pc_states, 0);
    ArrayResize(g_probHistory, 0);

@@ -1,4 +1,1 @@
-Compile MQL5/Experts/Acteck v 4.12.mq5 (F7) → Acteck v 4.12.ex5
-
-Имя файла = EA_VERSION / #property version.
-При следующем бампе версии: переименовать mq5 (git mv) и обновить ссылки в README / UserGuide / ТЗ.
+Compile MQL5/Experts/ASmart 2.00.mq5 (F7) → ASmart 2.00.ex5
