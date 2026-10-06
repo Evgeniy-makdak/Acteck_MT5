@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.04                                                      |
+//|  ASmart 2.05                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.04 — продолженное движение, 30%, SL/TP/сейф"
-#property version   "2.04"
+#property description "ASmart 2.05 — продолженное движение, 30%, SL/TP/сейф"
+#property version   "2.05"
 
-#define EA_VERSION "2.04"
+#define EA_VERSION "2.05"
 
 
 //=========================
@@ -291,6 +291,7 @@ input double               ZU_HeightATR_Mult    = 0.35;   // высота ЗУ �
 input int                  RM_ImpulseBars       = 4;      // баров импульса для РМ
 input double               RM_ImpulseATR_Mult   = 1.2;    // мин. импульс в ATR
 input double               RM_StallBodyATR_Max  = 0.35;   // макс. тело свечи "остановки"
+input double               RM_PeakATR_Pad       = 0.15;   // допуск «на вершине/дне»: доли ATR (не 1 пункт)
 input int                  MaxStructureZones    = 4;
 input color                ColorZU_Buy          = clrPaleTurquoise;
 input color                ColorZU_Sell         = clrBurlyWood;
@@ -4990,9 +4991,11 @@ void DetectReversalMoments(const MqlRates &rates[], const string tf_tag)
       else if(dn_move >= RM_ImpulseATR_Mult * atr && dn_move > up_move) dir = 1;
       else continue;
 
-      // Продажа — остановка на вершине импульса, покупка — на дне.
-      if(dir < 0 && stall.high + PointValue() < win_hi) continue;
-      if(dir > 0 && stall.low - PointValue() > win_lo) continue;
+      // Продажа — остановка в зоне вершины импульса, покупка — в зоне дна.
+      // Допуск не 1 пункт: иначе доджи на 2–3 пункта ниже хая никогда не рамка (шум котировки, не Снайпер).
+      const double peak_pad = MathMax(8.0 * PointValue(), MathMax(0.0, RM_PeakATR_Pad) * atr);
+      if(dir < 0 && stall.high + peak_pad < win_hi) continue;
+      if(dir > 0 && stall.low - peak_pad > win_lo) continue;
 
       double ink = 1.0;
       if(!MarkInk(stall.time, ink))
