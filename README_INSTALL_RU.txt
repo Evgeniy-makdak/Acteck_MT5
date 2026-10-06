@@ -7,4 +7,5 @@ ASmart 2.04 — установка
 
 Как считается ход (техника) — README.md
 Как торговать (решения) — UserGuide_Snayper_Pricel_EA_RU.txt
+Краткое how-to — ASmart_2.04_Manual_RU.pdf
 

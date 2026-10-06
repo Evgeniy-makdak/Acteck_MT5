@@ -9,7 +9,7 @@
 |------|------------|
 | `UserGuide_Snayper_Pricel_EA_RU.txt` | **Алгоритм трейдера:** вход и ведение сделки |
 | `README_INSTALL_RU.txt` | Установка и пресеты |
-| `Acteck_v4.1_Manual_RU.pdf` | Краткое how-to |
+| `ASmart_2.04_Manual_RU.pdf` | Краткое how-to |
 | `MQL5/Presets/00_README_Presets.txt` | Пресеты, золото, биткоин |
 
 ## Старт

@@ -1,4 +1,4 @@
-Acteck v4.1 — актуальные пресеты
+ASmart 2.04 — пресеты (файлы пока с именем Acteck_v4.1_*.set)
 
   Acteck_v4.1_<PAIR>_<mode>.set
   PAIR: EURUSD | GBPUSD | USDJPY | USDCHF | XAUUSD | BTCUSD
