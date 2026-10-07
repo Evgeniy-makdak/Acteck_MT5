@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Сборка актуального краткого руководства ASmart 2.06 (RU).
+"""Сборка актуального краткого руководства ASmart 2.07 (RU).
 
 Не дублирует UserGuide_Snayper_Pricel_EA_RU.txt: там карточка решения у графика.
 Здесь — установка, объекты, ход, РМ, тип 1 и A/B/C. Детектор подробно — README.md.
@@ -119,7 +119,7 @@ def header_footer(canvas, doc):
     canvas.rect(0, h - 16.8 * mm, w, 1.2 * mm, fill=1, stroke=0)
     canvas.setFillColor(white)
     canvas.setFont("ArialU", 9)
-    canvas.drawString(18 * mm, h - 10 * mm, "ASmart 2.06  ·  ACTECK MT5  ·  Снайпер")
+    canvas.drawString(18 * mm, h - 10 * mm, "ASmart 2.07  ·  ACTECK MT5  ·  Снайпер")
     canvas.drawRightString(w - 18 * mm, h - 10 * mm, "Краткое руководство")
     canvas.setFillColor(NAVY)
     canvas.rect(0, 0, w, 12 * mm, fill=1, stroke=0)
@@ -141,7 +141,7 @@ def cover_first(canvas, doc):
     canvas.setFont("ArialU", 11)
     canvas.drawCentredString(w / 2, h * 0.62, "ACTECK  ·  MetaTrader 5")
     canvas.setFont("ArialU", 26)
-    canvas.drawCentredString(w / 2, h * 0.52, "ASmart 2.06")
+    canvas.drawCentredString(w / 2, h * 0.52, "ASmart 2.07")
     canvas.setFont("ArialU", 13)
     canvas.drawCentredString(w / 2, h * 0.46, "Краткое руководство трейдера")
     canvas.setFillColor(HexColor("#E8E0D0"))
@@ -162,7 +162,7 @@ def build():
 
     story.append(Paragraph("1. Что это и чем файлы отличаются", ss["H1"]))
     story.append(Paragraph(
-        "ASmart 2.06 — советник MetaTrader 5 по логике Снайпера: безоткатное (продолженное) "
+        "ASmart 2.07 — советник MetaTrader 5 по логике Снайпера: безоткатное (продолженное) "
         "движение, откат 30%, разворотный момент, зона консолидации и стрелки A/B/C. "
         "Продукт тот же ACTECK MT5; имя советника — ASmart.",
         ss["Body"]))
@@ -174,7 +174,7 @@ def build():
     story.append(table(ss,
         ["Файл", "Зачем"],
         [
-            ["MQL5/Experts/ASmart 2.06.mq5", "Исходник. Собрать в MetaEditor клавишей F7."],
+            ["MQL5/Experts/ASmart 2.07.mq5", "Исходник. Собрать в MetaEditor клавишей F7."],
             ["UserGuide_Snayper_Pricel_EA_RU.txt", "Карточка трейдера: шаги 1–7, вход и ведение. Не этот PDF."],
             ["README.md", "Как детектируется ход, 20/30/50%, сигналы, сейф."],
             ["README_INSTALL_RU.txt", "Установка и пресеты."],
@@ -184,8 +184,8 @@ def build():
 
     story.append(Paragraph("2. Установка", ss["H1"]))
     story.append(bullets(ss, [
-        "MetaEditor → открыть <b>ASmart 2.06.mq5</b> → F7. Должен появиться ASmart 2.06.ex5.",
-        "С графика снять старую версию (2.05 и ниже). Перетащить на график <b>ASmart 2.06</b>.",
+        "MetaEditor → открыть <b>ASmart 2.07.mq5</b> → F7. Должен появиться ASmart 2.07.ex5.",
+        "С графика снять старую версию (2.06 и ниже). Перетащить на график <b>ASmart 2.07</b>.",
         "Inputs → Загрузить: Acteck_v4.1_&lt;инструмент&gt;_calm|scalp|swing_H1.set → OK.",
         "Сначала TradeEnabled=false: только разметка, без ордеров.",
         "SpeedPreset: SCALP (3) · CALM (8) · SWING (60). Смена → OK → перерисовка.",
@@ -224,11 +224,12 @@ def build():
         "Это не «N свечей одного цвета» и не пробой дня. На закрытии свечи советник ищет один свинг: начало хода → кончик. "
         "Импульс, если высота всего хода ≥ 2.5×ATR и длина ≥ 6 баров. Ход живёт, пока откат от кончика меньше 20%. "
         "Откат ≥ 20% фиксирует ход. Откат ≥ 30% — зона поиска (синяя «30»). "
-        "Новый экстремум за кончиком без разворота — тот же ход, кончик едет дальше, старая «30» желтеет. "
+        "Кончик продлевается, если следующая свеча <b>закрылась</b> за экстремумом или это сильная свеча по ходу. "
+        "Хвост доджи/пина за кончиком — ложный пробой: Z и «30» не перестраиваются. "
         "Встречный кусок внутри 50% родителя — коррекция, не новый ход.",
         ss["Body"]))
     story.append(Paragraph(
-        "Полные правила, пороги и примеры — README.md. Детектор хода (Z / 20 / 30 / 50) в 2.06 не менялся.",
+        "Полные правила и пороги — README.md.",
         ss["Note"]))
 
     story.append(Paragraph("6. Рамка и стрелка — не одно и то же", ss["H1"]))
@@ -239,10 +240,9 @@ def build():
         "Стрелка тоже только в момент закрытия сетапа, не на прошедших свечах.",
         ss["Body"]))
     story.append(Paragraph(
-        "Стрелка тип 1 (против хода у кончика) — другая цепочка: кончик → откат ≥ 30% без 50% → "
-        "возврат в зону кончика → <b>новая</b> рамка или Price Action на закрытой свече <b>после</b> кончика, "
-        "без нового экстремума. Рамка на самой свече кончика стрелку не ставит. Касание «30» задним числом "
-        "к старой рамке стрелку не приклеивает. Касание «30» само по себе — не вход.",
+        "Стрелка тип 1: кончик → касание «30» без отмены 50% → рамка на закрытой свече <b>после</b> кончика, "
+        "закрытие не за кончиком и не глубже рабочей «30» (зона от кончика до «30», не совпадение хая с кончиком). "
+        "Касание «30» само по себе — не вход. Хвост за кончиком у доджи Z не отменяет сетап.",
         ss["Body"]))
 
     story.append(Paragraph("7. Откуда стрелка A / B / C", ss["H1"]))
@@ -282,7 +282,7 @@ def build():
     def later(c, d):
         header_footer(c, d)
 
-    dest = ROOT / "ASmart_2.06_Manual_RU.pdf"
+    dest = ROOT / "ASmart_2.07_Manual_RU.pdf"
     doc = SimpleDocTemplate(
         str(dest),
         pagesize=A4,
@@ -290,7 +290,7 @@ def build():
         rightMargin=18 * mm,
         topMargin=22 * mm,
         bottomMargin=16 * mm,
-        title="ASmart 2.06 — краткое руководство",
+        title="ASmart 2.07 — краткое руководство",
         author="ACTECK",
     )
     doc.build(story, onFirstPage=first_page, onLaterPages=later)

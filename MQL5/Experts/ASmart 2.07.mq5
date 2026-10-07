@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.06                                                      |
+//|  ASmart 2.07                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.06 — продолженное движение, 30%, SL/TP/сейф"
-#property version   "2.06"
+#property description "ASmart 2.07 — продолженное движение, 30%, SL/TP/сейф"
+#property version   "2.07"
 
-#define EA_VERSION "2.06"
+#define EA_VERSION "2.07"
 
 
 //=========================
@@ -523,6 +523,7 @@ double MinContinuedMoveRange();
 bool   FindContinuedMove(const MqlRates &rates[], SContinuedMove &m);
 bool   BarHasReversalMoment(const datetime t, const int direction);
 bool   PassPriceAction(const int direction, const MqlRates &bar, const MqlRates &prev);
+bool   BarExtendsContinuedTip(const int dir, const MqlRates &bar, const MqlRates &prev, const double old_tip, const double atr);
 
 int    g_pdT1Trades = 0;
 
@@ -1191,9 +1192,13 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          continue;
       }
 
+      MqlRates prevb = rates[(i + 1 < nr) ? (i + 1) : i];
+      double atr_i = 0.0;
+      GetBufferValue(g_hATR_Filter, i, atr_i);
+
       if(dir < 0)
       {
-         if(l < tip)
+         if(l < tip && BarExtendsContinuedTip(-1, rates[i], prevb, tip, atr_i))
          {
             tip = l; t_tip = tm; i_tip = i;
             continue;
@@ -1201,7 +1206,7 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       }
       else
       {
-         if(h > tip)
+         if(h > tip && BarExtendsContinuedTip(1, rates[i], prevb, tip, atr_i))
          {
             tip = h; t_tip = tm; i_tip = i;
             continue;
@@ -1286,33 +1291,30 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    else
       return false;
 
-   double ext_h = m.tip, ext_l = m.tip;
-   int i_eh = m.i_tip, i_el = m.i_tip;
+   // После кончика: закрытие за экстремумом или сильная свеча по ходу — продлить.
+   // Хвост у доджи/разворота — ложный пробой, tip и «30» не двигаем.
    for(int i = m.i_tip - 1; i >= 1; i--)
    {
-      if(rates[i].high > ext_h) { ext_h = rates[i].high; i_eh = i; }
-      if(rates[i].low  < ext_l) { ext_l = rates[i].low;  i_el = i; }
+      double atr_i = 0.0;
+      GetBufferValue(g_hATR_Filter, i, atr_i);
+      MqlRates prevb = rates[(i + 1 < nr) ? (i + 1) : i];
+      if(m.dir > 0 && rates[i].high > m.tip && BarExtendsContinuedTip(1, rates[i], prevb, m.tip, atr_i))
+      {
+         m.tip = rates[i].high;
+         m.i_tip = i;
+         m.t_tip = rates[i].time;
+         m.range = MathAbs(m.origin - m.tip);
+      }
+      else if(m.dir < 0 && rates[i].low < m.tip && BarExtendsContinuedTip(-1, rates[i], prevb, m.tip, atr_i))
+      {
+         m.tip = rates[i].low;
+         m.i_tip = i;
+         m.t_tip = rates[i].time;
+         m.range = MathAbs(m.origin - m.tip);
+      }
    }
 
-   // Пауза кончилась продолжением тренда: новый экстремум за кончиком → тот же ход, tip едет дальше.
-   // Старая «30» больше не рабочая (это не разворотный уровень).
-   if(m.dir > 0 && ext_h > m.tip)
-   {
-      m.tip = ext_h;
-      m.i_tip = i_eh;
-      m.t_tip = rates[i_eh].time;
-      m.range = MathAbs(m.origin - m.tip);
-   }
-   else if(m.dir < 0 && ext_l < m.tip)
-   {
-      m.tip = ext_l;
-      m.i_tip = i_el;
-      m.t_tip = rates[i_el].time;
-      m.range = MathAbs(m.origin - m.tip);
-   }
-
-   ext_h = m.tip;
-   ext_l = m.tip;
+   double ext_h = m.tip, ext_l = m.tip;
    for(int i = m.i_tip - 1; i >= 1; i--)
    {
       if(rates[i].high > ext_h) ext_h = rates[i].high;
@@ -1887,6 +1889,39 @@ bool IsPinBarPattern(const int direction, const MqlRates &bar)
    bool long_wick = (upper >= 2.0 * body) && (upper >= 0.55 * range);
    bool close_low = (bar.close <= (bar.high - 0.55 * range));
    return (long_wick && close_low);
+}
+
+bool BarLooksLikeStopOrReversalAgainst(const int impulse_dir, const MqlRates &bar, const MqlRates &prev, const double atr)
+{
+   const int fade = (impulse_dir > 0) ? -1 : 1;
+   const double body = MathAbs(bar.close - bar.open);
+   const double stall_max = MathMax(0.0, RM_StallBodyATR_Max) * MathMax(atr, 8.0 * PointValue());
+   if(body <= stall_max)
+      return true;
+   if(IsPinBarPattern(fade, bar))
+      return true;
+   if(IsEngulfingPattern(fade, bar, prev))
+      return true;
+   if(IsOutsideBarPattern(fade, bar, prev))
+      return true;
+   return false;
+}
+
+bool BarExtendsContinuedTip(const int dir, const MqlRates &bar, const MqlRates &prev, const double old_tip, const double atr)
+{
+   if(dir > 0)
+   {
+      if(bar.high <= old_tip)
+         return false;
+      if(bar.close > old_tip)
+         return true;
+      return !BarLooksLikeStopOrReversalAgainst(dir, bar, prev, atr);
+   }
+   if(bar.low >= old_tip)
+      return false;
+   if(bar.close < old_tip)
+      return true;
+   return !BarLooksLikeStopOrReversalAgainst(dir, bar, prev, atr);
 }
 
 string DetectPatternName(const int direction, const MqlRates &bar, const MqlRates &prev)
@@ -5816,18 +5851,19 @@ void TryPDT1EntryFromRM(const MqlRates &rates[])
    double atr = 0.0;
    GetBufferValue(g_hATR_Filter, 1, atr);
    const double band = MathMax(8.0 * PointValue(), (atr > 0.0 ? MathMax(0.50, ZU_HeightATR_Mult) * atr : mv.range * 0.15));
+   const double fib30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (mv.origin - mv.tip);
    if(mv.dir > 0)
    {
-      if(bar.high + PointValue() < mv.tip - band)
-         return;
       if(bar.close > mv.tip)
+         return;
+      if(bar.close + PointValue() < fib30)
          return;
    }
    else
    {
-      if(bar.low - PointValue() > mv.tip + band)
-         return;
       if(bar.close < mv.tip)
+         return;
+      if(bar.close - PointValue() > fib30)
          return;
    }
 
