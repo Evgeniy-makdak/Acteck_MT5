@@ -185,7 +185,7 @@ def build():
     story.append(Paragraph("2. Установка", ss["H1"]))
     story.append(bullets(ss, [
         "MetaEditor → открыть <b>ASmart 2.11.mq5</b> → F7. Должен появиться ASmart 2.11.ex5.",
-        "С графика снять старую версию (2.09 и ниже). Перетащить на график <b>ASmart 2.11</b>.",
+        "С графика снять любую старую ASmart. Перетащить на график <b>ASmart 2.11</b>.",
         "Inputs → Загрузить: Acteck_v4.1_&lt;инструмент&gt;_calm|scalp|swing_H1.set → OK.",
         "Сначала TradeEnabled=false: только разметка, без ордеров.",
         "SpeedPreset: SCALP (3) · CALM (8) · SWING (60). Смена → OK → перерисовка.",

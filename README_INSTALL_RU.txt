@@ -1,7 +1,7 @@
 ASmart 2.11 — установка
 ========================
 1) MetaEditor: ASmart 2.11.mq5 → F7 (Compile)
-2) Снять с графика ASmart 2.09, перетащить «ASmart 2.11»
+2) Снять с графика любую старую ASmart, перетащить «ASmart 2.11»
 3) Inputs → Load: Acteck_v4.1_<PAIR>_calm|scalp|swing_H1.set
 4) Обучение: TradeEnabled=false
 
