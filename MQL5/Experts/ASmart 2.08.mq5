@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.07                                                      |
+//|  ASmart 2.08                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.07 — продолженное движение, 30%, SL/TP/сейф"
-#property version   "2.07"
+#property description "ASmart 2.08 — продолженное движение, 30%, SL/TP/сейф"
+#property version   "2.08"
 
-#define EA_VERSION "2.07"
+#define EA_VERSION "2.08"
 
 
 //=========================
@@ -525,7 +525,8 @@ bool   BarHasReversalMoment(const datetime t, const int direction);
 bool   PassPriceAction(const int direction, const MqlRates &bar, const MqlRates &prev);
 bool   BarExtendsContinuedTip(const int dir, const MqlRates &bar, const MqlRates &prev, const double old_tip, const double atr);
 
-int    g_pdT1Trades = 0;
+int      g_pdT1Trades = 0;
+datetime g_pdT1SpentTip = 0; // один сигнал/алерт тип1 на кончик Z
 
 // Dual-TF / Balance RSI / alerts runtime
 int      g_hRSI = INVALID_HANDLE;
@@ -2863,44 +2864,53 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
 
    color c = (direction > 0) ? ColorBuyMarker : ColorSellMarker;
    color fill = ToARGB(c, 40);
+   // Текст крупнее и темнее маркера — на белом фоне Lime/Tomato плохо читаются.
    const bool warn = (StringFind(chart_note, "против") >= 0 || StringFind(chart_note, "запрещает") >= 0);
-   color note_c = warn ? ColorFib30Old : c;
+   color title_c = (direction > 0) ? clrDarkGreen : clrMaroon;
+   color note_c = warn ? clrFireBrick : ((direction > 0) ? clrNavy : clrDarkRed);
+
+   double atr = 0.0;
+   GetBufferValue(g_hATR_Filter, 1, atr);
+   const double pad = MathMax(12.0 * PointValue(), (atr > 0.0 ? 0.12 * atr : 20.0 * PointValue()));
 
    int sec = PeriodSeconds(Timeframe);
    datetime t1 = bar.time;
    datetime t2 = bar.time + (datetime)sec;
 
-	string base = Prefix() + "SIG_" + TimeToObjectId(bar.time) + "_" + sig;
+   string base = Prefix() + "SIG_" + TimeToObjectId(bar.time) + "_" + sig;
 
    DrawRect(base + "_R", t1, bar.high, t2, bar.low, fill, true, true);
    ObjectSetString(0, base + "_R", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)c));
 
    string tip = (direction > 0) ? ("▲ " + sig + " BUY") : ("▼ " + sig + " SELL");
-   double text_price = (direction > 0) ? (bar.low - 10*PointValue()) : (bar.high + 10*PointValue());
-   DrawText(base + "_T", t1, text_price, tip, c,
+   double text_price = (direction > 0) ? (bar.low - pad) : (bar.high + pad);
+   DrawText(base + "_T", t1, text_price, tip, title_c,
             (direction > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
-   ObjectSetInteger(0, base + "_T", OBJPROP_FONTSIZE, 10);
-   ObjectSetInteger(0, base + "_T", OBJPROP_ZORDER, 90);
-   ObjectSetString(0, base + "_T", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)c));
-
-   if(StringLen(chart_note) > 0)
-   {
-      double note_price = (direction > 0) ? (bar.low - 28 * PointValue()) : (bar.high + 28 * PointValue());
-      DrawText(base + "_N", t1, note_price, chart_note, note_c,
-               (direction > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
-      ObjectSetInteger(0, base + "_N", OBJPROP_FONTSIZE, 8);
-      ObjectSetInteger(0, base + "_N", OBJPROP_ZORDER, 90);
-      ObjectSetString(0, base + "_N", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)note_c));
-   }
+   ObjectSetString(0, base + "_T", OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, base + "_T", OBJPROP_FONTSIZE, 13);
+   ObjectSetInteger(0, base + "_T", OBJPROP_ZORDER, 92);
+   ObjectSetString(0, base + "_T", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)title_c));
 
    if(ShowArrows)
    {
       double arrow_price = (direction > 0)
-         ? (bar.low - 18 * PointValue())
-         : (bar.high + 18 * PointValue());
+         ? (bar.low - 1.6 * pad)
+         : (bar.high + 1.6 * pad);
       DrawArrow(base + "_A", t1, arrow_price, (direction > 0), c);
-      ObjectSetInteger(0, base + "_A", OBJPROP_ZORDER, 91);
+      ObjectSetInteger(0, base + "_A", OBJPROP_WIDTH, 4);
+      ObjectSetInteger(0, base + "_A", OBJPROP_ZORDER, 93);
       ObjectSetString(0, base + "_A", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)c));
+   }
+
+   if(StringLen(chart_note) > 0)
+   {
+      double note_price = (direction > 0) ? (bar.low - 2.8 * pad) : (bar.high + 2.8 * pad);
+      DrawText(base + "_N", t1, note_price, chart_note, note_c,
+               (direction > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
+      ObjectSetString(0, base + "_N", OBJPROP_FONT, "Arial Bold");
+      ObjectSetInteger(0, base + "_N", OBJPROP_FONTSIZE, 11);
+      ObjectSetInteger(0, base + "_N", OBJPROP_ZORDER, 92);
+      ObjectSetString(0, base + "_N", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)note_c));
    }
 }
 
@@ -5841,6 +5851,9 @@ void TryPDT1EntryFromRM(const MqlRates &rates[])
       return;
    if(bar.time <= mv.t_tip)
       return;
+   // Один алерт/стрелка на этот кончик, пока tip не продлён подтверждённо.
+   if(g_pdT1SpentTip != 0 && g_pdT1SpentTip == mv.t_tip)
+      return;
 
    const int want = (mv.dir > 0) ? -1 : 1;
    if(!BarHasReversalMoment(bar.time, want))
@@ -5852,24 +5865,32 @@ void TryPDT1EntryFromRM(const MqlRates &rates[])
    GetBufferValue(g_hATR_Filter, 1, atr);
    const double band = MathMax(8.0 * PointValue(), (atr > 0.0 ? MathMax(0.50, ZU_HeightATR_Mult) * atr : mv.range * 0.15));
    const double fib30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (mv.origin - mv.tip);
+   // Возврат к экстремуму: закрытие в полосе tip … tip±40%×|tip−«30»|.
+   // Тень за tip у разворота (Z не продлён) допустима, если close снова у кончика.
+   const double near = 0.40 * MathAbs(mv.tip - fib30);
+   if(near < PointValue())
+      return;
    if(mv.dir > 0)
    {
+      // Ход вверх → продажа у верха. Close не выше tip (иначе вынос); не глубже tip−near.
       if(bar.close > mv.tip)
          return;
-      if(bar.close + PointValue() < fib30)
+      if(bar.close + PointValue() < mv.tip - near)
          return;
    }
    else
    {
+      // Ход вниз → покупка у дна. Close не ниже tip; не выше tip+near (не у самой «30»).
       if(bar.close < mv.tip)
          return;
-      if(bar.close - PointValue() > fib30)
+      if(bar.close - PointValue() > mv.tip + near)
          return;
    }
 
    double z_hi = (mv.dir > 0) ? (mv.tip + band * 0.25) : (mv.tip + band);
    double z_lo = (mv.dir > 0) ? (mv.tip - band) : (mv.tip - band * 0.25);
    ExecuteSignal("B", want, bar, z_hi, z_lo, g_pdT1Trades);
+   g_pdT1SpentTip = mv.t_tip;
 }
 
 //=========================
@@ -6686,6 +6707,7 @@ int OnInit()
    g_lastImpulseRange = 0.0;
    g_lastImpulseDir   = 0;
    g_pdT1Trades = 0;
+   g_pdT1SpentTip = 0;
 
    ArrayResize(g_pc_states, 0);
    ArrayResize(g_probHistory, 0);
