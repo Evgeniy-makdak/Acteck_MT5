@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.12                                                      |
+//|  ASmart 2.11                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.12 — прицел на BTC/волатильных: якорь по дневному диапазону"
-#property version   "2.12"
+#property description "ASmart 2.11 — прицел CALM: зоны ликвидности без SpeedPreset"
+#property version   "2.11"
 
-#define EA_VERSION "2.12"
+#define EA_VERSION "2.11"
 
 
 //=========================
@@ -3326,62 +3326,6 @@ bool NearPrice(const double price, const double level, const double atr_dist)
    return (MathAbs(price - level) <= atr_dist);
 }
 
-// На BTC/крипте M5-ATR << дневной ход: SightNearATR*ATR почти никогда не ловит сессии.
-// Берём max(ATR-окно, доля недавнего диапазона), чтобы прицел был и на золоте/форексе.
-double SightRecentPriceSpan(const MqlRates &rates[])
-{
-   double span = 0.0;
-   for(int i = 0; i < ArraySize(g_sessions); i++)
-   {
-      if(!g_sessions[i].valid) continue;
-      double s = g_sessions[i].high - g_sessions[i].low;
-      if(s > span) span = s;
-   }
-   const int n = ArraySize(rates);
-   if(n > 0)
-   {
-      int look = MathMin(n, MathMax(48, 288)); // ~1 день M5 / запас на H1
-      double hi = rates[0].high;
-      double lo = rates[0].low;
-      for(int i = 1; i < look; i++)
-      {
-         if(rates[i].high > hi) hi = rates[i].high;
-         if(rates[i].low < lo) lo = rates[i].low;
-      }
-      double s = hi - lo;
-      if(s > span) span = s;
-   }
-   return span;
-}
-
-double SightNearDistance(const double atr, const MqlRates &rates[])
-{
-   double near = SightNearATR * atr;
-   double span = SightRecentPriceSpan(rates);
-   // ≥ половины диапазона: в середине дня BTC всё равно «рядом» с ближайшим H/L
-   if(span > 0.0)
-      near = MathMax(near, 0.55 * span);
-   return MathMax(near, 8.0 * PointValue());
-}
-
-void ConsiderSightAnchor(const double price, const double level, const int anchor_dir,
-                         const double near, const double weight,
-                         double &best_score, double &best_level, int &best_anchor_dir)
-{
-   if(anchor_dir == 0 || level <= 0.0 || near <= 0.0)
-      return;
-   double dist = MathAbs(price - level);
-   if(dist > near)
-      return;
-   double score = weight - dist / near;
-   if(score > best_score)
-   {
-      best_score = score;
-      best_level = level;
-      best_anchor_dir = anchor_dir;
-   }
-}
-
 int CountTouches(const MqlRates &rates[], const double level, const int from_shift, const int bars, const double tol)
 {
    int c = 0;
@@ -3709,12 +3653,8 @@ void UpdateSight(const MqlRates &rates[])
       return;
 
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   const double near = SightNearDistance(atr, rates);
-   const double near_liq = near * 1.25;
+   const double near = SightNearATR * atr;
    const double h = MathMax(8 * PointValue(), SightATR_Height * atr);
-   const double span = SightRecentPriceSpan(rates);
-   // Снятие sticky на BTC: тоже от диапазона, иначе 2.5*ATR гасит прицел слишком рано/поздно
-   const double cancel_dist = MathMax(SightCancelATR * atr, (span > 0.0 ? 0.45 * span : 0.0));
 
    const bool had = g_sightActive;
    const int old_dir = g_sightDirection;
@@ -3730,52 +3670,45 @@ void UpdateSight(const MqlRates &rates[])
    for(int i = 0; i < ArraySize(g_sessions); i++)
    {
       if(!g_sessions[i].valid) continue;
-      ConsiderSightAnchor(price, g_sessions[i].low,  -1, near, 1.00, best_score, best_level, best_anchor_dir);
-      ConsiderSightAnchor(price, g_sessions[i].high,  1, near, 1.00, best_score, best_level, best_anchor_dir);
+      if(NearPrice(price, g_sessions[i].low, near))
+      {
+         double score = 1.0 - MathAbs(price - g_sessions[i].low) / near;
+         if(score > best_score) { best_score = score; best_level = g_sessions[i].low; best_anchor_dir = -1; }
+      }
+      if(NearPrice(price, g_sessions[i].high, near))
+      {
+         double score = 1.0 - MathAbs(price - g_sessions[i].high) / near;
+         if(score > best_score) { best_score = score; best_level = g_sessions[i].high; best_anchor_dir = 1; }
+      }
    }
 
    for(int i = 0; i < ArraySize(g_liqZones); i++)
    {
       if(!g_liqZones[i].active) continue;
       double mid = 0.5 * (g_liqZones[i].high + g_liqZones[i].low);
-      ConsiderSightAnchor(price, mid, g_liqZones[i].type, near_liq, 1.15, best_score, best_level, best_anchor_dir);
-      // Края зоны — тоже якоря (на BTC mid часто далеко при широкой зоне)
-      if(g_liqZones[i].type > 0)
-         ConsiderSightAnchor(price, g_liqZones[i].low, 1, near_liq, 1.10, best_score, best_level, best_anchor_dir);
-      else
-         ConsiderSightAnchor(price, g_liqZones[i].high, -1, near_liq, 1.10, best_score, best_level, best_anchor_dir);
+      if(!NearPrice(price, mid, near * 1.2))
+         continue;
+      double score = 1.15 - MathAbs(price - mid) / (near * 1.2);
+      if(score > best_score)
+      {
+         best_score = score;
+         best_level = mid;
+         best_anchor_dir = g_liqZones[i].type;
+      }
    }
 
    if(g_zone.active)
    {
-      ConsiderSightAnchor(price, g_zone.low,  -1, near, 1.05, best_score, best_level, best_anchor_dir);
-      ConsiderSightAnchor(price, g_zone.high,  1, near, 1.05, best_score, best_level, best_anchor_dir);
-   }
-
-   // ЗУ / ПД / ГУД — те же уровни, что уже на графике
-   for(int i = 0; i < ArraySize(g_structZones); i++)
-   {
-      if(!g_structZones[i].active || !g_structZones[i].valid) continue;
-      if(g_structZones[i].kind != SK_ZU && g_structZones[i].kind != SK_PD && g_structZones[i].kind != SK_GUD)
-         continue;
-      double w = (g_structZones[i].kind == SK_GUD) ? 1.20 : 1.08;
-      ConsiderSightAnchor(price, g_structZones[i].low,  -1, near, w, best_score, best_level, best_anchor_dir);
-      ConsiderSightAnchor(price, g_structZones[i].high,  1, near, w, best_score, best_level, best_anchor_dir);
-   }
-
-   // Макс/мин дня по недавним барам (как HOD/LOD)
-   if(ArraySize(rates) > 2)
-   {
-      int look = MathMin(ArraySize(rates), 288);
-      double dhi = rates[0].high;
-      double dlo = rates[0].low;
-      for(int i = 1; i < look; i++)
+      if(NearPrice(price, g_zone.low, near))
       {
-         if(rates[i].high > dhi) dhi = rates[i].high;
-         if(rates[i].low < dlo) dlo = rates[i].low;
+         double score = 1.05 - MathAbs(price - g_zone.low) / near;
+         if(score > best_score) { best_score = score; best_level = g_zone.low; best_anchor_dir = -1; }
       }
-      ConsiderSightAnchor(price, dlo, -1, near, 0.95, best_score, best_level, best_anchor_dir);
-      ConsiderSightAnchor(price, dhi,  1, near, 0.95, best_score, best_level, best_anchor_dir);
+      if(NearPrice(price, g_zone.high, near))
+      {
+         double score = 1.05 - MathAbs(price - g_zone.high) / near;
+         if(score > best_score) { best_score = score; best_level = g_zone.high; best_anchor_dir = 1; }
+      }
    }
 
    // Нет уверенного якоря → сохраняем прежний прицел (sticky), не гасим UI
@@ -3784,8 +3717,8 @@ void UpdateSight(const MqlRates &rates[])
       if(had)
       {
          bool far = false;
-         if(old_anchor != 0.0 && cancel_dist > 0.0)
-            far = (MathAbs(price - old_anchor) > cancel_dist);
+         if(atr > 0.0 && SightCancelATR > 0.0 && old_anchor != 0.0)
+            far = (MathAbs(price - old_anchor) > SightCancelATR * atr);
          if(far)
             ClearSight();
          else
