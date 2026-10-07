@@ -1,6 +1,6 @@
 # Acteck v4.1 — история (скорость для любого инструмента)
 
-> Актуальная сборка: **ASmart 2.09** (`MQL5/Experts/ASmart 2.09.mq5`). Ниже — журнал до v4.12, не инструкция «как сейчас».
+> Актуальная сборка: **ASmart 2.11** (`MQL5/Experts/ASmart 2.11.mq5`). Ниже — журнал до v4.12, не инструкция «как сейчас».
 
 ## Запрос
 
@@ -116,4 +116,15 @@ PAIR = EURUSD | GBPUSD | USDJPY | USDCHF
 - Тип 1: возврат к tip — тень в полосе 40% + разворот **или** close в полосе (не только close).
 - How-to: `ASmart_2.09_Manual_RU.pdf`.
 
+## 2026-10-07 — ASmart 2.10
 
+- Актуальный исходник: `MQL5/Experts/ASmart 2.10.mq5`.
+- После фиксации tip: продление только close за экстремумом; хвост при close обратно не двигает Z.
+- How-to: `ASmart_2.10_Manual_RU.pdf`.
+
+## 2026-10-07 — ASmart 2.11
+
+- Актуальный исходник: `MQL5/Experts/ASmart 2.11.mq5`.
+- Зоны ликвидности: глубина пивотов только `LiqPivotDepth` (не `SpeedPreset`) — на CALM снова появляется RGB-прицел.
+- Пресеты: явно `SightShowDashes=true` и цвета чёрточек.
+- How-to: `ASmart_2.11_Manual_RU.pdf`.

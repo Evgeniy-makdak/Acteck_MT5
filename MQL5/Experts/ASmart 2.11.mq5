@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.10                                                      |
+//|  ASmart 2.11                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.10 — продолженное движение, 30%, SL/TP/сейф"
-#property version   "2.10"
+#property description "ASmart 2.11 — прицел CALM: зоны ликвидности без SpeedPreset"
+#property version   "2.11"
 
-#define EA_VERSION "2.10"
+#define EA_VERSION "2.11"
 
 
 //=========================
@@ -207,7 +207,7 @@ input color                ColorNY              = clrTomato;
 
 input group "=== Sniper: Liquidity zones ==="
 input bool                 ShowLiquidityZones   = true;  // Спрос / Предложение (как на эталонном скрине)
-input int                  LiqPivotDepth        = 3;
+input int                  LiqPivotDepth        = 3;   // глубина пивотов зон ликвидности (не зависит от SpeedPreset)
 input double               LiqZoneATR_Mult      = 0.35;   // zone height = mult * ATR
 input int                  MaxLiquidityZones    = 3;
 input int                  LiqLookbackBars      = 250;
@@ -3349,7 +3349,9 @@ void UpdateLiquidityZones(const MqlRates &rates[])
    if(!GetBufferValue(g_hATR_Filter, 1, atr) || atr <= 0.0)
       return;
 
-   const int depth = MathMax(2, MathMax(LiqPivotDepth, EffectiveSwingDepth()));
+   // Только LiqPivotDepth: SpeedPreset (CALM=8 / SWING=60) не должен глушить зоны
+   // и RGB-прицел на M5. Паттерны/свинги по-прежнему берут EffectiveSwingDepth().
+   const int depth = MathMax(2, LiqPivotDepth);
    const int look = MathMin(ArraySize(rates) - depth - 2, MathMax(50, LiqLookbackBars));
    const double zh = MathMax(PointValue() * 5.0, LiqZoneATR_Mult * atr);
    const double tol = MathMax(PointValue() * 3.0, 0.15 * atr);
