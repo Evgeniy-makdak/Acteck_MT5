@@ -1,6 +1,6 @@
 # Acteck v4.1 — история (скорость для любого инструмента)
 
-> Актуальная сборка: **ASmart 2.11** (`MQL5/Experts/ASmart 2.11.mq5`). Ниже — журнал до v4.12, не инструкция «как сейчас».
+> Актуальная сборка: **ASmart 2.13** (`MQL5/Experts/ASmart 2.13.mq5`). Ниже — журнал до v4.12, не инструкция «как сейчас».
 
 ## Запрос
 
@@ -110,6 +110,12 @@ PAIR = EURUSD | GBPUSD | USDJPY | USDCHF
 
 ## 2026-10-07 — ASmart 2.11
 
-- Актуальные файлы в репо: только `MQL5/Experts/ASmart 2.11.mq5` и `ASmart_2.11_Manual_RU.pdf` (старые версии не храним).
 - Зоны ликвидности: глубина пивотов только `LiqPivotDepth` (не `SpeedPreset`) — на CALM снова появляется RGB-прицел.
 - Пресеты: явно `SightShowDashes=true` и цвета чёрточек.
+
+## 2026-10-07 — ASmart 2.13
+
+- Актуальные файлы: только `MQL5/Experts/ASmart 2.13.mq5` и `ASmart_2.13_Manual_RU.pdf`.
+- При стрелке входа сразу рисуются гориз. **SL** и **Сейф ТП** (`ShowEntrySLTPLines`).
+- Спред/stops из `docs/specifications-POINT.pdf` (типичный + живой): pad SL, min-дистанция, сейф не ближе спреда.
+- Пресеты переименованы `Acteck_v2.13_*.set`; MaxSpread подогнан под POINT.

@@ -1,2 +1,2 @@
-Compile MQL5/Experts/ASmart 2.11.mq5 (F7) → ASmart 2.11.ex5
+Compile MQL5/Experts/ASmart 2.13.mq5 (F7) → ASmart 2.13.ex5
 Каждый коммит логики: поднять #property version / EA_VERSION и имя файла.

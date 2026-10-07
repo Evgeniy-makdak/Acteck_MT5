@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.11                                                      |
+//|  ASmart 2.13                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.11 — прицел CALM: зоны ликвидности без SpeedPreset"
-#property version   "2.11"
+#property description "ASmart 2.13 — SL/Сейф-линии у стрелки, спред POINT"
+#property version   "2.13"
 
-#define EA_VERSION "2.11"
+#define EA_VERSION "2.13"
 
 
 //=========================
@@ -167,6 +167,7 @@ input bool                 ShowSwingLine        = false; // UI: меньше л�
 // Graphics / alerts
 input bool                 ShowZones            = true;
 input bool                 ShowEntryMarker      = true;
+input bool                 ShowEntrySLTPLines   = true;   // при стрелке: гориз. SL + ТП по Сейфу
 input bool                 KeepSignalHistory    = false; // UI: не копить старые маркеры
 input bool                 FadeOldMarkings      = true;  // старая разметка бледнеет и исчезает
 input int                  MarkFadeAfterHours   = 18;    // после этого контур бледнеет
@@ -555,6 +556,8 @@ bool   BalanceRSIAllows(const int direction);
 bool   HasMTFConfluence(const int direction);
 bool   DetectMTFConfluence(const int direction);
 int    EffectiveSwingDepth();
+int    EffectiveSafeStep1Points(const double entry, const double sl);
+double ComputeSafeTpPrice(const int direction, const double entry, const double sl);
 void   UpdateSniperStructures(const MqlRates &rates[]);
 void   UpdateBalanceRSIPanel();
 void   UpdateBoundariesChannel(const MqlRates &rates[]);
@@ -723,6 +726,92 @@ int CurrentSpreadPoints()
    return (int)MathRound((ask - bid) / PointValue());
 }
 
+// База символа без суффикса брокера (EURUSD / XAUUSD / BTCUSD …)
+string ChartSymbolBase()
+{
+   string s = _Symbol;
+   StringToUpper(s);
+   string majors[] = {"EURUSD","GBPUSD","USDJPY","USDCHF","XAUUSD","XAGUSD","BTCUSD","BTCUSDT","ETHUSD"};
+   for(int i = 0; i < ArraySize(majors); i++)
+   {
+      if(StringFind(s, majors[i]) == 0)
+         return majors[i];
+   }
+   if(StringFind(s, "GOLD") == 0)
+      return "XAUUSD";
+   if(StringFind(s, "BITCOIN") >= 0 || (StringLen(s) >= 3 && StringFind(s, "BTC") == 0))
+      return "BTCUSD";
+   // PreferredSymbol из пресета (если график ещё с суффиксом)
+   string pref = PreferredSymbol;
+   StringToUpper(pref);
+   if(StringLen(pref) >= 6)
+      return pref;
+   return s;
+}
+
+// Размер «пункта» брокера POINT: 5/3 знака → pip=10×Point; иначе Point
+double BrokerPipSize()
+{
+   double point = PointValue();
+   int digits = DigitsValue();
+   if(digits == 3 || digits == 5)
+      return point * 10.0;
+   return point;
+}
+
+// Типичный спред из docs/specifications-POINT.pdf (цена).
+// FX/металлы — в пунктах брокера; BTC — 0,06% от цены.
+double SpecTypicalSpreadPrice()
+{
+   string b = ChartSymbolBase();
+   double pip = BrokerPipSize();
+   double point = PointValue();
+   if(b == "EURUSD") return 1.4 * pip;
+   if(b == "GBPUSD") return 2.1 * pip;
+   if(b == "USDJPY") return 2.0 * pip;
+   if(b == "USDCHF") return 2.0 * pip;
+   if(b == "XAUUSD") return 45.0 * point; // «другие инструменты»: 1 пункт = Point
+   if(b == "XAGUSD") return 90.0 * point;
+   if(b == "BTCUSD" || b == "BTCUSDT")
+   {
+      double px = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      if(px <= 0.0) px = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      return MathMax(point, px * 0.0006); // 0,06%
+   }
+   if(b == "ETHUSD")
+   {
+      double px = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      if(px <= 0.0) px = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      return MathMax(point, px * 0.0009); // 0,09%
+   }
+   return 0.0;
+}
+
+// Уровень limit&stop из спецификации POINT → цена
+double SpecStopsLevelPrice()
+{
+   string b = ChartSymbolBase();
+   double pip = BrokerPipSize();
+   double point = PointValue();
+   if(b == "EURUSD") return 0.7 * pip;
+   if(b == "GBPUSD") return 1.1 * pip;
+   if(b == "USDJPY") return 0.9 * pip;
+   if(b == "USDCHF") return 1.0 * pip;
+   if(b == "XAUUSD") return 25.0 * point;
+   if(b == "XAGUSD") return 75.0 * point;
+   return 0.0; // BTC и пр. в спеке = 0
+}
+
+// Рабочий спред для уровней: max(живой, типичный из POINT)
+double EffectiveSpreadPrice()
+{
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double live = (ask > bid && bid > 0.0) ? (ask - bid) : 0.0;
+   double spec = SpecTypicalSpreadPrice();
+   return MathMax(live, spec);
+}
+
 void Log(const string msg)
 {
    Print(CommentPrefix, ": ", msg);
@@ -766,6 +855,8 @@ void LogEnvironment()
 
    Log(StringFormat("Init v%s | TerminalBuild=%I64d | ProgramBuild=%I64d | MarginMode=%s | Hedging=%s | Symbol=%s | TF=%s | Digits=%d | Point=%g | Vol(min/max/step)=%.2f/%.2f/%.2f | StopLevel=%d | FreezeLevel=%d",
                     EA_VERSION, term_build, prog_build, EnumToString(mm), (g_isHedging ? "true" : "false"), _Symbol, EnumToString(Timeframe), digits, point, vmin, vmax, vstep, stopLevel, freezeLevel));
+   Log(StringFormat("POINT spread: live=%d pts | typical=%.5f | stopsSpec=%.5f | base=%s",
+                    CurrentSpreadPoints(), SpecTypicalSpreadPrice(), SpecStopsLevelPrice(), ChartSymbolBase()));
 
    if(!g_isHedging)
       Log("WARNING: Account margin mode is not RETAIL_HEDGING. The EA is designed for hedging accounts (TZ 1.8). Trading/partial close behaviour may differ on netting accounts.");
@@ -2175,6 +2266,14 @@ void AdjustStopsToBroker(const int direction, double entry_price, double &sl, do
    double point = PointValue();
    int stops_level = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    double min_dist = stops_level * point;
+   // Спека POINT (limit&stop) — нижняя граница, если брокер в терминале отдаёт 0
+   double spec_min = SpecStopsLevelPrice();
+   if(spec_min > min_dist)
+      min_dist = spec_min;
+   // + спред: стоп/тейк не ближе, чем спред + stops
+   double spr = EffectiveSpreadPrice();
+   if(spr > 0.0)
+      min_dist = MathMax(min_dist, spr);
 
    // Safety: even if broker reports 0 StopLevel, keep at least 1 point distance to avoid invalid SL/TP
    if(min_dist < point)
@@ -2902,6 +3001,27 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
       ObjectSetInteger(0, base + "_N", OBJPROP_FONTSIZE, 11);
       ObjectSetInteger(0, base + "_N", OBJPROP_ZORDER, 92);
       ObjectSetString(0, base + "_N", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)note_c));
+   }
+
+   // Горизонтали SL и ТП по Сейфу сразу со стрелкой (спред уже в BuildSLTP / ComputeSafeTpPrice)
+   if(ShowEntrySLTPLines)
+   {
+      datetime ray = t1 + (datetime)(sec * MathMax(12, SightBarsWidth));
+      double safe_tp = ComputeSafeTpPrice(direction, entry, sl);
+      if(sl > 0.0)
+      {
+         DrawHLineSegment(base + "_SL", t1, ray, sl, clrCrimson, STYLE_DASH, 2, "SL");
+         DrawText(base + "_SL_T", ray, sl, "SL", clrCrimson, ANCHOR_LEFT_UPPER);
+         ObjectSetInteger(0, base + "_SL_T", OBJPROP_FONTSIZE, 9);
+         ObjectSetInteger(0, base + "_SL_T", OBJPROP_ZORDER, 94);
+      }
+      if(safe_tp > 0.0)
+      {
+         DrawHLineSegment(base + "_SAFE", t1, ray, safe_tp, clrForestGreen, STYLE_DASH, 2, "Сейф");
+         DrawText(base + "_SAFE_T", ray, safe_tp, "Сейф ТП", clrForestGreen, ANCHOR_LEFT_UPPER);
+         ObjectSetInteger(0, base + "_SAFE_T", OBJPROP_FONTSIZE, 9);
+         ObjectSetInteger(0, base + "_SAFE_T", OBJPROP_ZORDER, 94);
+      }
    }
 }
 
@@ -5430,7 +5550,29 @@ int EffectiveSafeStep1Points(const double entry, const double sl)
       if(by_imp > 0 && by_imp < one_r)
          one_r = by_imp;
    }
+   // минимум — типичный/живой спред в пунктах MT5
+   double spr = EffectiveSpreadPrice();
+   int spr_pts = (p > 0.0) ? (int)MathRound(spr / p) : 0;
+   if(spr_pts > 0 && one_r < spr_pts)
+      one_r = spr_pts;
    return one_r;
+}
+
+double ComputeSafeTpPrice(const int direction, const double entry, const double sl)
+{
+   double p = PointValue();
+   if(p <= 0.0 || entry <= 0.0)
+      return 0.0;
+   int step_pts = EffectiveSafeStep1Points(entry, sl);
+   if(!UseSafeRule && PC_Step1 > 0)
+      step_pts = PC_Step1;
+   double dist = (double)MathMax(1, step_pts) * p;
+   double spr = EffectiveSpreadPrice();
+   if(dist < spr + p)
+      dist = spr + p;
+   if(direction > 0)
+      return NormalizePrice(entry + dist);
+   return NormalizePrice(entry - dist);
 }
 
 bool PassBreakoutQuality(const MqlRates &bar, string &why)
@@ -5506,6 +5648,7 @@ void MarkTradeInBar(const datetime signal_bar_time)
 void BuildSLTP(const int direction, const double entry, const double zone_high, const double zone_low, double &sl, double &tp)
 {
    double p = PointValue();
+   double spr = EffectiveSpreadPrice();
 
    // SL
    if(SL_Mode == SL_FIXED)
@@ -5524,6 +5667,14 @@ void BuildSLTP(const int direction, const double entry, const double zone_high, 
          sl -= SL_AtrPad * atr_sl;
       else
          sl += SL_AtrPad * atr_sl;
+   }
+   // Спред POINT/живой: отодвигаем SL от цены входа (реальный риск с учётом ask/bid)
+   if(spr > 0.0)
+   {
+      if(direction > 0)
+         sl -= spr;
+      else
+         sl += spr;
    }
 
    // TP: импульс (полное продолжение) или индекс страха 1R/2R/3R

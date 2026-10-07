@@ -1,7 +1,7 @@
-# ASmart 2.11 (MT5) — Снайпер
+# ASmart 2.13 (MT5) — Снайпер
 
-Файл: `MQL5/Experts/ASmart 2.11.mq5`  
-Пресеты: `MQL5/Presets/Acteck_v4.1_<инструмент>_scalp|calm|swing_H1.set`
+Файл: `MQL5/Experts/ASmart 2.13.mq5`  
+Пресеты: `MQL5/Presets/Acteck_v2.13_<инструмент>_scalp|calm|swing_H1.set`
 
 Инструменты: EURUSD, GBPUSD, USDJPY, USDCHF, **XAUUSD**, **BTCUSD**.
 
@@ -9,12 +9,12 @@
 |------|------------|
 | `UserGuide_Snayper_Pricel_EA_RU.txt` | **Карточка трейдера** у графика: вход и ведение |
 | `README_INSTALL_RU.txt` | Установка и пресеты |
-| `ASmart_2.11_Manual_RU.pdf` | Печатное how-to (не дублирует UserGuide) |
+| `ASmart_2.13_Manual_RU.pdf` | Печатное how-to (не дублирует UserGuide) |
 | `MQL5/Presets/00_README_Presets.txt` | Пресеты, золото, биткоин |
 
 ## Старт
 
-1. MetaEditor → `ASmart 2.11.mq5` → F7. Снимите старую версию с графика, повесьте `2.11`.
+1. MetaEditor → `ASmart 2.13.mq5` → F7. Снимите старую версию с графика, повесьте `2.13`.
 2. На график советник → Inputs → Загрузить пресет → OK.
 3. Сначала `TradeEnabled=false`: только разметка.
 4. Решения по сделкам — по `UserGuide_Snayper_Pricel_EA_RU.txt`.

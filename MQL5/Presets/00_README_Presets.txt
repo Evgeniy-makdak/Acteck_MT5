@@ -1,6 +1,6 @@
-ASmart 2.11 — пресеты (файлы с именем Acteck_v4.1_*.set)
+ASmart 2.13 — пресеты (файлы с именем Acteck_v2.13_*.set)
 
-  Acteck_v4.1_<PAIR>_<mode>.set
+  Acteck_v2.13_<PAIR>_<mode>.set
   PAIR: EURUSD | GBPUSD | USDJPY | USDCHF | XAUUSD | BTCUSD
   mode: scalp | calm | swing_H1
 
