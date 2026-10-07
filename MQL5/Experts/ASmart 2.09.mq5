@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.08                                                      |
+//|  ASmart 2.09                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.08 — продолженное движение, 30%, SL/TP/сейф"
-#property version   "2.08"
+#property description "ASmart 2.09 — продолженное движение, 30%, SL/TP/сейф"
+#property version   "2.09"
 
-#define EA_VERSION "2.08"
+#define EA_VERSION "2.09"
 
 
 //=========================
@@ -5865,25 +5865,30 @@ void TryPDT1EntryFromRM(const MqlRates &rates[])
    GetBufferValue(g_hATR_Filter, 1, atr);
    const double band = MathMax(8.0 * PointValue(), (atr > 0.0 ? MathMax(0.50, ZU_HeightATR_Mult) * atr : mv.range * 0.15));
    const double fib30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (mv.origin - mv.tip);
-   // Возврат к экстремуму: закрытие в полосе tip … tip±40%×|tip−«30»|.
-   // Тень за tip у разворота (Z не продлён) допустима, если close снова у кончика.
+   // Возврат к экстремуму (после касания «30»):
+   // A) тень в зоне tip±40% пути tip→«30» + разворотная свеча (ложный пробой, Z не продлён);
+   // B) либо закрытие в той же полосе без выноса за tip.
    const double near = 0.40 * MathAbs(mv.tip - fib30);
    if(near < PointValue())
       return;
    if(mv.dir > 0)
    {
-      // Ход вверх → продажа у верха. Close не выше tip (иначе вынос); не глубже tip−near.
       if(bar.close > mv.tip)
          return;
-      if(bar.close + PointValue() < mv.tip - near)
+      const bool close_in = (bar.close + PointValue() >= mv.tip - near);
+      const bool wick_in = (bar.high + PointValue() >= mv.tip - near);
+      const bool rev = BarLooksLikeStopOrReversalAgainst(1, bar, prev, atr);
+      if(!close_in && !(wick_in && rev))
          return;
    }
    else
    {
-      // Ход вниз → покупка у дна. Close не ниже tip; не выше tip+near (не у самой «30»).
       if(bar.close < mv.tip)
          return;
-      if(bar.close - PointValue() > mv.tip + near)
+      const bool close_in = (bar.close - PointValue() <= mv.tip + near);
+      const bool wick_in = (bar.low - PointValue() <= mv.tip + near);
+      const bool rev = BarLooksLikeStopOrReversalAgainst(-1, bar, prev, atr);
+      if(!close_in && !(wick_in && rev))
          return;
    }
 
