@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
-//|  ASmart 2.13                                                      |
+//|  ASmart 2.14                                                      |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper-style liquidity EA: sessions, sight, probability HUD      |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 2.13 — SL/Сейф-линии у стрелки, спред POINT"
-#property version   "2.13"
+#property description "ASmart 2.14 — SL/Сейф persist; очистка при удалении; прицел стабилен"
+#property version   "2.14"
 
-#define EA_VERSION "2.13"
+#define EA_VERSION "2.14"
 
 
 //=========================
@@ -168,7 +168,7 @@ input bool                 ShowSwingLine        = false; // UI: меньше л�
 input bool                 ShowZones            = true;
 input bool                 ShowEntryMarker      = true;
 input bool                 ShowEntrySLTPLines   = true;   // при стрелке: гориз. SL + ТП по Сейфу
-input bool                 KeepSignalHistory    = false; // UI: не копить старые маркеры
+input bool                 KeepSignalHistory    = true;  // стрелка/SL/Сейф остаются (вкл. после смены вкладки)
 input bool                 FadeOldMarkings      = true;  // старая разметка бледнеет и исчезает
 input int                  MarkFadeAfterHours   = 18;    // после этого контур бледнеет
 input int                  MarkHideAfterHours   = 48;    // старше — скрыть (позавчера)
@@ -408,6 +408,15 @@ bool     g_sightActive = false;
 int      g_sightDrawnDirection = 0; // что реально нарисовано (чтобы не мигать)
 datetime g_sightUpdateBar = 0;
 
+// Последний сигнал входа — переживает OnDeinit/смену вкладки (через GlobalVariables)
+bool     g_lastEntryHave = false;
+int      g_lastEntryDir = 0;
+datetime g_lastEntryBar = 0;
+double   g_lastEntryPrice = 0.0;
+double   g_lastEntrySL = 0.0;
+double   g_lastEntrySafe = 0.0;
+string   g_lastEntrySig = "";
+
 struct SSessionLevel
 {
    string   name;
@@ -558,6 +567,10 @@ bool   DetectMTFConfluence(const int direction);
 int    EffectiveSwingDepth();
 int    EffectiveSafeStep1Points(const double entry, const double sl);
 double ComputeSafeTpPrice(const int direction, const double entry, const double sl);
+void   PersistLastEntrySignal();
+void   LoadLastEntrySignal();
+void   DrawEntrySLTPLevels(const datetime t_sig, const int direction, const double entry, const double sl, const double safe_tp);
+void   RestoreLastEntryVisuals();
 void   UpdateSniperStructures(const MqlRates &rates[]);
 void   UpdateBalanceRSIPanel();
 void   UpdateBoundariesChannel(const MqlRates &rates[]);
@@ -2930,19 +2943,184 @@ void UpdateSwingLine(const MqlRates &rates[])
 //=========================
 // Signal visualization
 //=========================
+string EntryPersistKey(const string suffix)
+{
+   // Уникально на символ+magic — переживает смену вкладки / OnInit
+   return StringFormat("ASmart_%s_%I64d_%s", ChartSymbolBase(), (long)MagicNumber, suffix);
+}
+
+void PersistLastEntrySignal()
+{
+   if(!g_lastEntryHave)
+      return;
+   GlobalVariableSet(EntryPersistKey("have"), 1.0);
+   GlobalVariableSet(EntryPersistKey("dir"), (double)g_lastEntryDir);
+   GlobalVariableSet(EntryPersistKey("bar"), (double)g_lastEntryBar);
+   GlobalVariableSet(EntryPersistKey("entry"), g_lastEntryPrice);
+   GlobalVariableSet(EntryPersistKey("sl"), g_lastEntrySL);
+   GlobalVariableSet(EntryPersistKey("safe"), g_lastEntrySafe);
+}
+
+void ClearEntryPersist()
+{
+   g_lastEntryHave = false;
+   string suf[] = {"have", "dir", "bar", "entry", "sl", "safe"};
+   for(int i = 0; i < ArraySize(suf); i++)
+   {
+      string k = EntryPersistKey(suf[i]);
+      if(GlobalVariableCheck(k))
+         GlobalVariableDel(k);
+   }
+}
+
+void LoadLastEntrySignal()
+{
+   g_lastEntryHave = false;
+   if(!GlobalVariableCheck(EntryPersistKey("have")))
+      return;
+   if(GlobalVariableGet(EntryPersistKey("have")) < 0.5)
+      return;
+   g_lastEntryDir = (int)GlobalVariableGet(EntryPersistKey("dir"));
+   g_lastEntryBar = (datetime)GlobalVariableGet(EntryPersistKey("bar"));
+   g_lastEntryPrice = GlobalVariableGet(EntryPersistKey("entry"));
+   g_lastEntrySL = GlobalVariableGet(EntryPersistKey("sl"));
+   g_lastEntrySafe = GlobalVariableGet(EntryPersistKey("safe"));
+   g_lastEntrySig = "B";
+   g_lastEntryHave = (g_lastEntryBar > 0 && g_lastEntryDir != 0 && g_lastEntryPrice > 0.0);
+   // Мусор от другого символа/масштаба — не восстанавливать (ломает масштаб графика)
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(g_lastEntryHave && bid > 0.0)
+   {
+      if(g_lastEntryPrice > bid * 3.0 || g_lastEntryPrice < bid / 3.0)
+      {
+         ClearEntryPersist();
+         g_lastEntryHave = false;
+      }
+   }
+}
+
+void ClearEntryLevelObjects()
+{
+   DeleteObjectsByPrefix(Prefix() + "ENTRY_");
+}
+
+void DrawEntrySLTPLevels(const datetime t_sig, const int direction, const double entry, const double sl, const double safe_tp)
+{
+   if(!ShowEntrySLTPLines)
+      return;
+   ClearEntryLevelObjects();
+
+   const string pfx = Prefix() + "ENTRY_";
+   // Полные горизонтали — не короткие TREND (после скролла/prune линия пропадала, текст оставался)
+   if(sl > 0.0)
+   {
+      string n = pfx + "SL";
+      if(!ObjExists(n))
+         ObjectCreate(0, n, OBJ_HLINE, 0, 0, sl);
+      ObjectSetDouble(0, n, OBJPROP_PRICE, sl);
+      ObjectSetInteger(0, n, OBJPROP_COLOR, clrCrimson);
+      ObjectSetInteger(0, n, OBJPROP_STYLE, STYLE_DASH);
+      ObjectSetInteger(0, n, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, n, OBJPROP_BACK, true);
+      ObjectSetInteger(0, n, OBJPROP_SELECTABLE, false);
+      ObjectSetString(0, n, OBJPROP_TEXT, "SL");
+
+      string nt = pfx + "SL_LBL";
+      datetime t_lbl = (t_sig > 0 ? t_sig : iTime(_Symbol, Timeframe, 0));
+      string lab = (direction > 0) ? "SL (BUY)" : "SL (SELL)";
+      DrawText(nt, t_lbl, sl, lab, clrCrimson, ANCHOR_LEFT_UPPER);
+      ObjectSetInteger(0, nt, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(0, nt, OBJPROP_ZORDER, 94);
+   }
+   if(safe_tp > 0.0)
+   {
+      string n = pfx + "SAFE";
+      if(!ObjExists(n))
+         ObjectCreate(0, n, OBJ_HLINE, 0, 0, safe_tp);
+      ObjectSetDouble(0, n, OBJPROP_PRICE, safe_tp);
+      ObjectSetInteger(0, n, OBJPROP_COLOR, clrForestGreen);
+      ObjectSetInteger(0, n, OBJPROP_STYLE, STYLE_DASH);
+      ObjectSetInteger(0, n, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, n, OBJPROP_BACK, true);
+      ObjectSetInteger(0, n, OBJPROP_SELECTABLE, false);
+      ObjectSetString(0, n, OBJPROP_TEXT, "Сейф");
+
+      string nt = pfx + "SAFE_LBL";
+      datetime t_lbl = (t_sig > 0 ? t_sig : iTime(_Symbol, Timeframe, 0));
+      string lab = (direction > 0) ? "Сейф ТП (BUY)" : "Сейф ТП (SELL)";
+      DrawText(nt, t_lbl, safe_tp, lab, clrForestGreen, ANCHOR_LEFT_UPPER);
+      ObjectSetInteger(0, nt, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(0, nt, OBJPROP_ZORDER, 94);
+   }
+   if(entry > 0.0)
+   {
+      string n = pfx + "ENTRY";
+      if(!ObjExists(n))
+         ObjectCreate(0, n, OBJ_HLINE, 0, 0, entry);
+      ObjectSetDouble(0, n, OBJPROP_PRICE, entry);
+      ObjectSetInteger(0, n, OBJPROP_COLOR, clrDodgerBlue);
+      ObjectSetInteger(0, n, OBJPROP_STYLE, STYLE_DOT);
+      ObjectSetInteger(0, n, OBJPROP_WIDTH, 1);
+      ObjectSetInteger(0, n, OBJPROP_BACK, true);
+      ObjectSetInteger(0, n, OBJPROP_SELECTABLE, false);
+   }
+}
+
+void RestoreLastEntryVisuals()
+{
+   LoadLastEntrySignal();
+   if(!g_lastEntryHave)
+      return;
+   DrawEntrySLTPLevels(g_lastEntryBar, g_lastEntryDir, g_lastEntryPrice, g_lastEntrySL, g_lastEntrySafe);
+
+   // Стрелку тоже восстановить, если история включена
+   if(KeepSignalHistory && ShowEntryMarker && ShowArrows && g_lastEntryBar > 0)
+   {
+      double atr = 0.0;
+      GetBufferValue(g_hATR_Filter, 1, atr);
+      const double pad = MathMax(12.0 * PointValue(), (atr > 0.0 ? 0.12 * atr : 20.0 * PointValue()));
+      color c = (g_lastEntryDir > 0) ? ColorBuyMarker : ColorSellMarker;
+      string base = Prefix() + "SIG_" + TimeToObjectId(g_lastEntryBar) + "_LAST";
+      double arrow_price = (g_lastEntryDir > 0) ? (g_lastEntryPrice - 1.6 * pad) : (g_lastEntryPrice + 1.6 * pad);
+      DrawArrow(base + "_A", g_lastEntryBar, arrow_price, (g_lastEntryDir > 0), c);
+      ObjectSetInteger(0, base + "_A", OBJPROP_WIDTH, 4);
+      ObjectSetInteger(0, base + "_A", OBJPROP_ZORDER, 93);
+      string tip = (g_lastEntryDir > 0) ? "▲ BUY" : "▼ SELL";
+      DrawText(base + "_T", g_lastEntryBar, arrow_price, tip, (g_lastEntryDir > 0) ? clrDarkGreen : clrMaroon,
+               (g_lastEntryDir > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
+      ObjectSetInteger(0, base + "_T", OBJPROP_FONTSIZE, 12);
+   }
+}
+
+bool IsEntryLevelObjectName(const string name)
+{
+   if(StringFind(name, Prefix() + "ENTRY_") == 0)
+      return true;
+   // Старые обломки 2.13: SIG_*_SL / SIG_*_SAFE / подписи
+   if(StringFind(name, Prefix() + "SIG_") != 0)
+      return false;
+   if(StringFind(name, "_SL") >= 0 || StringFind(name, "_SAFE") >= 0)
+      return true;
+   return false;
+}
+
 void ClearSignalObjectsIfNeeded()
 {
-   if(KeepSignalHistory)
-      return;
-
+   // Всегда снимаем только маркеры стрелки; уровни ENTRY_ живут до нового сигнала
    string pfx = Prefix() + "SIG_";
    int total = ObjectsTotal(0, 0, -1);
    for(int i = total - 1; i >= 0; i--)
    {
       string name = ObjectName(0, i, 0, -1);
-      if(StringFind(name, pfx) == 0)
-         ObjectDelete(0, name);
+      if(StringFind(name, pfx) != 0)
+         continue;
+      if(IsEntryLevelObjectName(name))
+         continue; // не трогаем SL/Сейф от прошлой схемы имён
+      if(KeepSignalHistory)
+         continue; // копить стрелки
+      ObjectDelete(0, name);
    }
+   ClearEntryLevelObjects(); // новый сигнал — новые уровни
 }
 
 void VisualizeSignal(const string sig, const int direction, const MqlRates &bar, const double entry, const double sl, const double tp, const string status, const string chart_note)
@@ -3003,26 +3181,21 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
       ObjectSetString(0, base + "_N", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)note_c));
    }
 
-   // Горизонтали SL и ТП по Сейфу сразу со стрелкой (спред уже в BuildSLTP / ComputeSafeTpPrice)
-   if(ShowEntrySLTPLines)
-   {
-      datetime ray = t1 + (datetime)(sec * MathMax(12, SightBarsWidth));
-      double safe_tp = ComputeSafeTpPrice(direction, entry, sl);
-      if(sl > 0.0)
-      {
-         DrawHLineSegment(base + "_SL", t1, ray, sl, clrCrimson, STYLE_DASH, 2, "SL");
-         DrawText(base + "_SL_T", ray, sl, "SL", clrCrimson, ANCHOR_LEFT_UPPER);
-         ObjectSetInteger(0, base + "_SL_T", OBJPROP_FONTSIZE, 9);
-         ObjectSetInteger(0, base + "_SL_T", OBJPROP_ZORDER, 94);
-      }
-      if(safe_tp > 0.0)
-      {
-         DrawHLineSegment(base + "_SAFE", t1, ray, safe_tp, clrForestGreen, STYLE_DASH, 2, "Сейф");
-         DrawText(base + "_SAFE_T", ray, safe_tp, "Сейф ТП", clrForestGreen, ANCHOR_LEFT_UPPER);
-         ObjectSetInteger(0, base + "_SAFE_T", OBJPROP_FONTSIZE, 9);
-         ObjectSetInteger(0, base + "_SAFE_T", OBJPROP_ZORDER, 94);
-      }
-   }
+   double safe_tp = ComputeSafeTpPrice(direction, entry, sl);
+   g_lastEntryHave = true;
+   g_lastEntryDir = direction;
+   g_lastEntryBar = bar.time;
+   g_lastEntryPrice = entry;
+   g_lastEntrySL = sl;
+   g_lastEntrySafe = safe_tp;
+   g_lastEntrySig = sig;
+   PersistLastEntrySignal();
+   DrawEntrySLTPLevels(bar.time, direction, entry, sl, safe_tp);
+
+   // tp в аргументе — полный тейк ордера; на графике по ТЗ показываем Сейф
+   if(tp > 0.0 && MathAbs(tp - safe_tp) > PointValue())
+      Log(StringFormat("Entry levels: %s entry=%.2f SL=%.2f Safe=%.2f fullTP=%.2f spr=%.2f",
+                       (direction > 0 ? "BUY" : "SELL"), entry, sl, safe_tp, tp, EffectiveSpreadPrice()));
 }
 
 void PrunePastDecisionMarks()
@@ -3041,6 +3214,9 @@ void PrunePastDecisionMarks()
       string name = ObjectName(0, i, 0, -1);
       if(StringFind(name, pfx) != 0)
          continue;
+      // SL/Сейф и подписи уровней не режем по времени (иначе линия уходит, текст «SL» остаётся)
+      if(IsEntryLevelObjectName(name))
+         continue;
       datetime t = (datetime)ObjectGetInteger(0, name, OBJPROP_TIME, 0);
       if(t > 0 && t < keep_from)
          ObjectDelete(0, name);
@@ -3056,7 +3232,10 @@ void AgeSignalObjects()
    for(int i = total - 1; i >= 0; i--)
    {
       string name = ObjectName(0, i, 0, -1);
-      if(StringFind(name, pfx) != 0)
+      if(StringFind(name, pfx) != 0 && StringFind(name, Prefix() + "ENTRY_") != 0)
+         continue;
+      // Уровни входа не бледнеют и не удаляются по возрасту
+      if(IsEntryLevelObjectName(name) || StringFind(name, Prefix() + "ENTRY_") == 0)
          continue;
       datetime t = (datetime)ObjectGetInteger(0, name, OBJPROP_TIME, 0);
       double ink = 1.0;
@@ -3067,7 +3246,10 @@ void AgeSignalObjects()
       }
       if(ink >= 0.98)
          continue;
-      if((StringFind(name, "_T") >= 0 || StringFind(name, "_N") >= 0) && ink < 0.45)
+      // Только подпись стрелки (_T) и note (_N), не _SL_T / _SAFE_T
+      const bool is_title = (StringFind(name, "_T") == StringLen(name) - 2);
+      const bool is_note  = (StringFind(name, "_N") == StringLen(name) - 2);
+      if((is_title || is_note) && ink < 0.45)
       {
          ObjectDelete(0, name);
          continue;
@@ -3682,7 +3864,13 @@ void NudgeSightLevelsLive()
 // BUY = голубая рамка, SELL = бордовая. Без заливки.
 void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
 {
+   // Только отрисовка/очистка объектов прицела — без изменения логики якорей.
    if(!ShowSight || !g_sightActive)
+   {
+      DeleteObjectsWithPrefix(Prefix() + "SIGHT_");
+      return;
+   }
+   if(ArraySize(rates) < 1)
       return;
 
    int sec = PeriodSeconds(Timeframe);
@@ -3766,7 +3954,10 @@ void UpdateSight(const MqlRates &rates[])
    // (иначе кадр «пустого» прицела при смене BUY↔SELL).
 
    if(!ShowSight && !RequireSightForEntry)
+   {
+      DeleteObjectsWithPrefix(Prefix() + "SIGHT_"); // только снять объекты UI
       return;
+   }
 
    double atr = 0.0;
    if(!GetBufferValue(g_hATR_Filter, 1, atr) || atr <= 0.0)
@@ -6948,6 +7139,26 @@ int OnInit()
    if(g_lastBarTime > 0)
       ProcessOnBarClose();
 
+   // После полной очистки OnInit вернуть стрелку/SL/Сейф последнего сигнала
+   // (переинит/рекомпиляция — не удаление экспертом).
+   RestoreLastEntryVisuals();
+
+   // Форс перерисовки прицела после wipe OnInit (логика якорей та же, только объекты)
+   if(ShowSight)
+   {
+      MqlRates sight_rates[];
+      ArraySetAsSeries(sight_rates, true);
+      int need_s = MathMax(400, CZ_LookbackN + 30);
+      if(CopyRates(_Symbol, Timeframe, 0, need_s, sight_rates) >= (CZ_LookbackN + 10))
+      {
+         if(g_sightActive)
+            SyncSightObjects(sight_rates, true);
+         else
+            UpdateSight(sight_rates);
+      }
+   }
+   ChartRedraw(0);
+
    return INIT_SUCCEEDED;
 }
 
@@ -6955,6 +7166,15 @@ void OnDeinit(const int reason)
 {
    if(g_intrabarTimerSet)
       EventKillTimer();
+
+   // Удаление эксперта / закрытие графика — снести всю отрисовку и persist.
+   // Рекомпиляция / смена параметров — сохранить persist, wipe сделает OnInit + Restore.
+   const bool hard_remove = (reason == REASON_REMOVE || reason == REASON_CHARTCLOSE);
+
+   if(!hard_remove)
+      PersistLastEntrySignal();
+   else
+      ClearEntryPersist();
 
    if(g_hEMA != INVALID_HANDLE)
       IndicatorRelease(g_hEMA);
@@ -6970,7 +7190,10 @@ void OnDeinit(const int reason)
    g_hATR_Zone = INVALID_HANDLE;
    g_hRSI = INVALID_HANDLE;
 
-   CleanupChartGraphics();
+   if(hard_remove)
+      CleanupChartGraphics();
+   else
+      Comment("");
 }
 
 //=========================

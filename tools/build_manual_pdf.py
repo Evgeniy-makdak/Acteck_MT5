@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Сборка актуального краткого руководства ASmart 2.13 (RU).
+"""Сборка актуального краткого руководства ASmart 2.14 (RU).
 
 Не дублирует UserGuide_Snayper_Pricel_EA_RU.txt: там карточка решения у графика.
 Здесь — установка, объекты, ход, РМ, тип 1 и A/B/C. Детектор подробно — README.md.
@@ -119,7 +119,7 @@ def header_footer(canvas, doc):
     canvas.rect(0, h - 16.8 * mm, w, 1.2 * mm, fill=1, stroke=0)
     canvas.setFillColor(white)
     canvas.setFont("ArialU", 9)
-    canvas.drawString(18 * mm, h - 10 * mm, "ASmart 2.13  ·  ACTECK MT5  ·  Снайпер")
+    canvas.drawString(18 * mm, h - 10 * mm, "ASmart 2.14  ·  ACTECK MT5  ·  Снайпер")
     canvas.drawRightString(w - 18 * mm, h - 10 * mm, "Краткое руководство")
     canvas.setFillColor(NAVY)
     canvas.rect(0, 0, w, 12 * mm, fill=1, stroke=0)
@@ -141,7 +141,7 @@ def cover_first(canvas, doc):
     canvas.setFont("ArialU", 11)
     canvas.drawCentredString(w / 2, h * 0.62, "ACTECK  ·  MetaTrader 5")
     canvas.setFont("ArialU", 26)
-    canvas.drawCentredString(w / 2, h * 0.52, "ASmart 2.13")
+    canvas.drawCentredString(w / 2, h * 0.52, "ASmart 2.14")
     canvas.setFont("ArialU", 13)
     canvas.drawCentredString(w / 2, h * 0.46, "Краткое руководство трейдера")
     canvas.setFillColor(HexColor("#E8E0D0"))
@@ -162,7 +162,7 @@ def build():
 
     story.append(Paragraph("1. Что это и чем файлы отличаются", ss["H1"]))
     story.append(Paragraph(
-        "ASmart 2.13 — советник MetaTrader 5 по логике Снайпера: безоткатное (продолженное) "
+        "ASmart 2.14 — советник MetaTrader 5 по логике Снайпера: безоткатное (продолженное) "
         "движение, откат 30%, разворотный момент, зона консолидации и стрелки A/B/C. "
         "Продукт тот же ACTECK MT5; имя советника — ASmart.",
         ss["Body"]))
@@ -174,19 +174,19 @@ def build():
     story.append(table(ss,
         ["Файл", "Зачем"],
         [
-            ["MQL5/Experts/ASmart 2.13.mq5", "Исходник. Собрать в MetaEditor клавишей F7."],
+            ["MQL5/Experts/ASmart 2.14.mq5", "Исходник. Собрать в MetaEditor клавишей F7."],
             ["UserGuide_Snayper_Pricel_EA_RU.txt", "Карточка трейдера: шаги 1–7, вход и ведение. Не этот PDF."],
             ["README.md", "Как детектируется ход, 20/30/50%, сигналы, сейф."],
             ["README_INSTALL_RU.txt", "Установка и пресеты."],
-            ["MQL5/Presets/Acteck_v2.13_*.set", "Пресеты: EUR, GBP, JPY, CHF, золото, биткоин."],
+            ["MQL5/Presets/Acteck_v2.14_*.set", "Пресеты: EUR, GBP, JPY, CHF, золото, биткоин."],
         ],
         [70 * mm, 110 * mm]))
 
     story.append(Paragraph("2. Установка", ss["H1"]))
     story.append(bullets(ss, [
-        "MetaEditor → открыть <b>ASmart 2.13.mq5</b> → F7. Должен появиться ASmart 2.13.ex5.",
-        "С графика снять любую старую ASmart. Перетащить на график <b>ASmart 2.13</b>.",
-        "Inputs → Загрузить: Acteck_v2.13_&lt;инструмент&gt;_calm|scalp|swing_H1.set → OK.",
+        "MetaEditor → открыть <b>ASmart 2.14.mq5</b> → F7. Должен появиться ASmart 2.14.ex5.",
+        "С графика снять любую старую ASmart. Перетащить на график <b>ASmart 2.14</b>.",
+        "Inputs → Загрузить: Acteck_v2.14_&lt;инструмент&gt;_calm|scalp|swing_H1.set → OK.",
         "Сначала TradeEnabled=false: только разметка, без ордеров.",
         "SpeedPreset: SCALP (3) · CALM (8) · SWING (60). Смена → OK → перерисовка.",
         "Инструменты: EURUSD, GBPUSD, USDJPY, USDCHF, XAUUSD, BTCUSD.",
@@ -282,7 +282,7 @@ def build():
     def later(c, d):
         header_footer(c, d)
 
-    dest = ROOT / "ASmart_2.13_Manual_RU.pdf"
+    dest = ROOT / "ASmart_2.14_Manual_RU.pdf"
     doc = SimpleDocTemplate(
         str(dest),
         pagesize=A4,
@@ -290,7 +290,7 @@ def build():
         rightMargin=18 * mm,
         topMargin=22 * mm,
         bottomMargin=16 * mm,
-        title="ASmart 2.13 — краткое руководство",
+        title="ASmart 2.14 — краткое руководство",
         author="ACTECK",
     )
     doc.build(story, onFirstPage=first_page, onLaterPages=later)
