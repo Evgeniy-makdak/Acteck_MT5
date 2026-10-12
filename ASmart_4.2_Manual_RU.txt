@@ -1,0 +1,34 @@
+ASmart 4.2 — краткий мануал (RU)
+================================
+
+Файл эксперта: MQL5/Experts/ASmart 4.2.mq5
+Префикс объектов/сделок: ASmart42_
+Пресеты: MQL5/Presets/Acteck_v4.2_<PAIR>_<scalp|calm|swing_H1>.set
+
+1. Установка
+   - MetaEditor → Compile ASmart 4.2.mq5
+   - Снять предыдущий EA с графика
+   - Навесить ASmart 4.2, загрузить пресет пары
+
+2. Режимы сигналов
+   - ИКИ-КЗ A/B/C: UseIKI_KZ_ForSignals=true (по умолчанию)
+   - Урочные структуры: EnableLessonEntries=true
+     ПД T1/T2, Exp T1/T2, Casc 3/4 — отдельные флаги Enable*_Entries
+
+3. Ключевые %
+   - PD_ContinuedExitPct = 170
+   - PD_MinCorrectionPct = 30
+   - PD_RetestMaxHours = 6
+   - Exp1_PullbackMin/MaxPct = 35 / 50
+   - ZU_SizePctOfMove = 30
+   - CascadeMaxBreakoutPct = 100
+   - CascadeRetrace50Pct = 50
+   - CascadeRetrace70Pct = 70
+
+4. Источники правил
+   - tools/lessons_mt/*.txt (извлечено из iSpring уроков МТ)
+   - Sniper/*.pdf (базовая/каскадная модель 38.2 / 23.6, ИКИ)
+
+5. Ограничения
+   - Это алгоритмическая реализация правил уроков, не побайтовая копия Sniper-Pro.
+   - Слайды-картинки без OCR не копируют пиксель-в-пиксель разметку индикатора Pro.
