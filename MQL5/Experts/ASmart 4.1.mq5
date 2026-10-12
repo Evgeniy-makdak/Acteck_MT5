@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.0                                                       |
+//|  ASmart 4.1                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper Pro: A/B/C от ИКИ-КЗ (не ATR-консолидация CZ)             |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.0 — сигналы A/B/C от ИКИ-КЗ как Sniper Pro"
-#property version   "4.00"
+#property description "ASmart 4.1 — ИКИ-КЗ сигналы + мягкие настраиваемые цвета Спрос/Предложение"
+#property version   "4.10"
 
-#define EA_VERSION "4.0"
+#define EA_VERSION "4.1"
 
 
 //=========================
@@ -160,7 +160,7 @@ input int                  MaxPositions         = 1;
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart40";
+input string               CommentPrefix        = "ASmart41";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -217,8 +217,11 @@ input int                  LiqPivotDepth        = 3;   // глубина пив�
 input double               LiqZoneATR_Mult      = 0.35;   // zone height = mult * ATR
 input int                  MaxLiquidityZones    = 3;
 input int                  LiqLookbackBars      = 250;
-input color                ColorSupplyZone      = clrMistyRose;
-input color                ColorDemandZone      = clrPowderBlue;
+input color                ColorSupplyZone      = C'186,150,155'; // Предложение: мягкий пыльно-розовый
+input color                ColorDemandZone      = C'150,170,185'; // Спрос: мягкий серо-голубой
+input color                ColorSupplyLabel     = C'150,110,120'; // подпись «Предложение»
+input color                ColorDemandLabel     = C'90,120,145';  // подпись «Спрос»
+input int                  LiqZoneFillAlpha     = 32;             // заливка зон 8..80 (мягче = меньше)
 
 input group "=== Sniper: Sight (Прицел) ==="
 input bool                 ShowSight            = true;
@@ -4071,10 +4074,13 @@ void UpdateLiquidityZones(const MqlRates &rates[])
       string name = Prefix() + "LIQ_" + IntegerToString(tmp[i].id);
       if(ink >= 0.45)
       {
-         color fill = ToARGB(base, (int)(55.0 * ink));
+         int a0 = LiqZoneFillAlpha;
+         if(a0 < 8) a0 = 8;
+         if(a0 > 80) a0 = 80;
+         color fill = ToARGB(base, (int)(a0 * ink));
          DrawRect(name, tmp[i].t1, tmp[i].high, tmp[i].t2, tmp[i].low, fill, true, true);
          string lbl = (tmp[i].type > 0) ? "Предложение" : "Спрос";
-         color lc = InkColor((tmp[i].type > 0) ? ColorNY : ColorLondon, ink);
+         color lc = InkColor((tmp[i].type > 0) ? ColorSupplyLabel : ColorDemandLabel, ink);
          DrawText(name + "_T", tmp[i].t1, (tmp[i].type > 0) ? tmp[i].high : tmp[i].low,
                   lbl, lc, (tmp[i].type > 0) ? ANCHOR_LEFT_LOWER : ANCHOR_LEFT_UPPER);
       }

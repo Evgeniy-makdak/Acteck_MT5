@@ -1,3 +1,3 @@
-Compile MQL5/Experts/ASmart 4.0.mq5 (F7)
-PDF: python3 tools/build_manual_pdf_40.py
-Карточка: UserGuide_ASmart_4.0_RU.txt
+Compile MQL5/Experts/ASmart 4.1.mq5 (F7)
+PDF: python3 tools/build_manual_pdf_41.py
+Карточка: UserGuide_ASmart_4.1_RU.txt
