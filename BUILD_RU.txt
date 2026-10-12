@@ -1,2 +1,2 @@
-Compile MQL5/Experts/ASmart 3.7.mq5 (F7)
-PDF: python3 tools/build_manual_pdf_37.py
+Compile MQL5/Experts/ASmart 3.8.mq5 (F7)
+PDF: python3 tools/build_manual_pdf_38.py

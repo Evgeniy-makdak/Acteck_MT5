@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Сборка краткого руководства ASmart 3.7 (RU).
+"""Сборка краткого руководства ASmart 3.8 (RU).
 
-Карточка у графика: UserGuide_ASmart_3.7_RU.txt
+Карточка у графика: UserGuide_ASmart_3.8_RU.txt
 Для 2.14: ASmart_2.14_Manual_RU.pdf + UserGuide_Snayper_Pricel_EA_RU.txt
 """
 
@@ -103,7 +103,7 @@ def header_footer(canvas, doc):
     canvas.rect(0, h - 16.8 * mm, w, 1.2 * mm, fill=1, stroke=0)
     canvas.setFillColor(white)
     canvas.setFont("ArialU", 9)
-    canvas.drawString(18 * mm, h - 10 * mm, "ASmart 3.7  ·  ACTECK MT5  ·  Снайпер PDF")
+    canvas.drawString(18 * mm, h - 10 * mm, "ASmart 3.8  ·  ACTECK MT5  ·  Снайпер PDF")
     canvas.drawRightString(w - 18 * mm, h - 10 * mm, "Краткое руководство")
     canvas.setFillColor(NAVY)
     canvas.rect(0, 0, w, 12 * mm, fill=1, stroke=0)
@@ -125,12 +125,12 @@ def cover_first(canvas, doc):
     canvas.setFont("ArialU", 11)
     canvas.drawCentredString(w / 2, h * 0.62, "ACTECK  ·  MetaTrader 5")
     canvas.setFont("ArialU", 26)
-    canvas.drawCentredString(w / 2, h * 0.52, "ASmart 3.7")
+    canvas.drawCentredString(w / 2, h * 0.52, "ASmart 3.8")
     canvas.setFont("ArialU", 13)
     canvas.drawCentredString(w / 2, h * 0.46, "Краткое руководство трейдера")
     canvas.setFillColor(HexColor("#E8E0D0"))
     canvas.setFont("ArialU", 10)
-    canvas.drawCentredString(w / 2, h * 0.36, "Z ИКИ-ломаная  ·  КЗ тонкой линией  ·  ИКИ")
+    canvas.drawCentredString(w / 2, h * 0.36, "Z база→tip  ·  КЗ тонкой линией  ·  ИКИ")
     canvas.drawCentredString(w / 2, h * 0.32, "Линия 30%  ·  РМ  ·  A/B/C  ·  индекс страха")
     canvas.setFont("ArialU", 8.5)
     canvas.drawCentredString(w / 2, 22 * mm, "Актуально на 12 октября 2026 ")
@@ -145,34 +145,34 @@ def build():
 
     story.append(Paragraph("1. Версии и файлы", ss["H1"]))
     story.append(Paragraph(
-        "ASmart 3.7 приводит логику к правилам методичек Снайпер (базовые свечи, ИКИ, коррекционные зоны, "
+        "ASmart 3.8 приводит логику к правилам методичек Снайпер (базовые свечи, ИКИ, коррекционные зоны, "
         "базовая и каскадная модели расширения), сохраняя UX ASmart: «30», прицел, стрелки, алерты.",
         ss["Body"]))
     story.append(Paragraph(
-        "Снять предыдущую версию с графика, повесить <b>ASmart 3.7</b> (префикс ASmart37_). ",
+        "Снять предыдущую версию с графика, повесить <b>ASmart 3.8</b> (префикс ASmart38_). ",
         ss["Note"]))
     story.append(table(ss,
         ["Файл", "Зачем"],
         [
-            ["MQL5/Experts/ASmart 3.7.mq5", "Исходник 3.7. F7 → ASmart 3.7.ex5"],
-            ["MQL5/Experts/ASmart 3.7.mq5", "Исходник ASmart 3.7"],
-            ["UserGuide_ASmart_3.7_RU.txt", "Шпаргалка у графика для 3.7"],
+            ["MQL5/Experts/ASmart 3.8.mq5", "Исходник 3.8. F7 → ASmart 3.8.ex5"],
+            ["MQL5/Experts/ASmart 3.8.mq5", "Исходник ASmart 3.8"],
+            ["UserGuide_ASmart_3.8_RU.txt", "Шпаргалка у графика для 3.8"],
             ["UserGuide_Snayper_Pricel_EA_RU.txt", "Шпаргалка для 2.14"],
-            ["README.md", "Детектор 3.7, пороги, объекты"],
+            ["README.md", "Детектор 3.8, пороги, объекты"],
             ["Sniper/*.pdf", "Методички: механика, КЗ, базовая/каскадная модели"],
         ],
         [70 * mm, 110 * mm]))
 
     story.append(Paragraph("2. Установка", ss["H1"]))
     story.append(bullets(ss, [
-        "MetaEditor → <b>ASmart 3.7.mq5</b> → F7.",
-        "Снять с графика старую версию. Навесить <b>ASmart 3.7</b> (префикс объектов ASmart37_).",
+        "MetaEditor → <b>ASmart 3.8.mq5</b> → F7.",
+        "Снять с графика старую версию. Навесить <b>ASmart 3.8</b> (префикс объектов ASmart38_).",
         "Сначала TradeEnabled=false: только разметка.",
         "SpeedPreset: SCALP (3) · CALM (8) · SWING (60).",
-        "Решения — по UserGuide_ASmart_3.7_RU.txt.",
+        "Решения — по UserGuide_ASmart_3.8_RU.txt.",
     ]))
 
-    story.append(Paragraph("3. Что на графике (3.7)", ss["H1"]))
+    story.append(Paragraph("3. Что на графике (3.8)", ss["H1"]))
     story.append(table(ss,
         ["Объект", "Смысл"],
         [
@@ -216,7 +216,7 @@ def build():
 
     story.append(Paragraph("5. Как торговать", ss["H1"]))
     story.append(Paragraph(
-        "Пошаговое решение — только в <b>UserGuide_ASmart_3.7_RU.txt</b>. "
+        "Пошаговое решение — только в <b>UserGuide_ASmart_3.8_RU.txt</b>. "
         "Логика входа A/B/C, сейф min(1R, 0.30×импульс), трейл — как в 2.14.",
         ss["Body"]))
     story.append(Paragraph(
@@ -239,10 +239,10 @@ def build():
 
     story.append(Paragraph("Карточка у графика", ss["H1"]))
     story.append(Paragraph(
-        "Пять вопросов перед входом — в конце UserGuide_ASmart_3.7_RU.txt.",
+        "Пять вопросов перед входом — в конце UserGuide_ASmart_3.8_RU.txt.",
         ss["Body"]))
 
-    dest = ROOT / "ASmart_3.7_Manual_RU.pdf"
+    dest = ROOT / "ASmart_3.8_Manual_RU.pdf"
     doc = SimpleDocTemplate(
         str(dest),
         pagesize=A4,
@@ -250,7 +250,7 @@ def build():
         rightMargin=18 * mm,
         topMargin=22 * mm,
         bottomMargin=16 * mm,
-        title="ASmart 3.7 — краткое руководство",
+        title="ASmart 3.8 — краткое руководство",
         author="ACTECK",
     )
     doc.build(story, onFirstPage=cover_first, onLaterPages=header_footer)

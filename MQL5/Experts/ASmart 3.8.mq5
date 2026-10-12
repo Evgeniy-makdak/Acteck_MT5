@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 3.7                                                       |
+//|  ASmart 3.8                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: IKI Z polyline (org→tip1→corr→tip) + thin KZ             |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 3.7 — Z как ИКИ-ломаная Pro (начало→tip1→корр→tip)"
-#property version   "3.70"
+#property description "ASmart 3.8 — Z: база=последняя коррекция ИКИ → tip (как Pro)"
+#property version   "3.80"
 
-#define EA_VERSION "3.7"
+#define EA_VERSION "3.8"
 
 
 //=========================
@@ -156,7 +156,7 @@ input int                  MaxPositions         = 1;
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart37";
+input string               CommentPrefix        = "ASmart38";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -273,7 +273,7 @@ input bool                 ShowZoneFill         = false;  // заливка зо
 input bool                 ShowFib30            = true;   // вспомог. линия «30» (UX ASmart)
 input bool                 ShowModelFib382      = false;  // базовая модель: линия 38.2% (выкл. — не нужна для входа)
 input bool                 ShowModelFib236      = false;  // каскад: линия 23.6% (выкл. по умолч.)
-input bool                 ShowContinuedMoveZ   = true;   // Z: ИКИ-ломаная как Pro (4 точки)
+input bool                 ShowContinuedMoveZ   = true;   // Z: диагональ база(корр.ИКИ)→tip как Pro
 input bool                 ShowTipZeroLabel     = true;   // подпись «-0.00» у кончика хода (как Pro)
 input bool                 ShowBasePathDebug    = false;  // ОТЛАДКА: ломаная узлов + ✓/✗/◇
 input int                  BasePathMaxBars      = 80;     // глубина отладки пути (баров)
@@ -1482,8 +1482,8 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(ne < 6)
       return false;
 
-   // Ищем действительные ИКИ и продолжение после коррекции (как Z у Pro):
-   // org1 → tip1 → corr → tip_продолжения
+   // ИКИ → база Z = экстремум ПОСЛЕДНЕЙ подходящей коррекции (не самый ранний гигант).
+   // На графике Pro: диагональ corr→tip + горизонт на corr.
    int best_i2_end = -1;
    double best_score = 0.0;
    int best_dir = 0;
@@ -1566,7 +1566,13 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          if(tip2 >= tip1 - eps) continue;
       }
 
-      // продлить tip2 дальше по тому же направлению (безоткатное после ИКИ)
+      // действительная коррекция: глубина ≥ PD_CompletePullbackPct от импульса1
+      const double i1_range = MathAbs(tip1 - org1);
+      if(i1_range < MinContinuedMoveRange() * 0.5) continue;
+      const double corr_depth = MathAbs(tip1 - corr_ext);
+      if(corr_depth + 1.0e-12 < complete_need * i1_range) continue;
+
+      // продлить tip2 только пока нет встречного события (безоткатное)
       int i_tip_ev = i2_end;
       for(int k = i2_end + 1; k < ne; k++)
       {
@@ -1575,7 +1581,6 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          if(d2 < 0 && ev[k].extreme < tip2) { tip2 = ev[k].extreme; t_tip2 = ev[k].time; i_tip_ev = k; }
       }
 
-      // база продолжения у Pro = экстремум коррекции (горизонталь 158.308 на скрине)
       const double origin = corr_ext;
       const double tip = tip2;
       const double sz = MathAbs(tip - origin);
@@ -1586,18 +1591,24 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          if(ev[k].base_i != last_bi) { nbase++; last_bi = ev[k].base_i; }
       if(!ImpulseQualified(sz, MathMax(3, nbase))) continue;
 
-      // оценка: крупнее ход + новее tip
-      const double score = sz + (double)(nr - ev[i_tip_ev].rate_idx) * PointValue() * 0.01;
-      if(score > best_score)
-      {
-         best_score = score;
-         best_dir = d2;
-         best_org1 = org1; best_tip1 = tip1; best_corr = corr_ext; best_tip = tip;
-         best_t1 = t_org1; best_t2 = t_tip1; best_t3 = t_corr; best_t4 = t_tip2;
-         best_i_tip = ev[i_tip_ev].rate_idx;
-         best_nbase = nbase;
-         best_i2_end = i_tip_ev;
-      }
+      // копить кандидатов в «лучших» по tip; финальный выбор — самая СВЕЖАЯ коррекция
+      // (иначе берётся утренний гигантский ИКИ — Z слишком крупный vs Pro)
+      const bool better_tip = (best_dir == 0) ||
+         (d2 > 0 && tip > best_tip + eps) ||
+         (d2 < 0 && tip < best_tip - eps) ||
+         (MathAbs(tip - best_tip) <= eps && t_corr >= best_t3);
+      if(!better_tip) continue;
+      // при том же tip предпочитаем более позднюю базу коррекции
+      if(best_dir != 0 && MathAbs(tip - best_tip) <= eps && t_corr < best_t3)
+         continue;
+
+      best_score = sz;
+      best_dir = d2;
+      best_org1 = org1; best_tip1 = tip1; best_corr = corr_ext; best_tip = tip;
+      best_t1 = t_org1; best_t2 = t_tip1; best_t3 = t_corr; best_t4 = t_tip2;
+      best_i_tip = ev[i_tip_ev].rate_idx;
+      best_nbase = nbase;
+      best_i2_end = i_tip_ev;
    }
 
    if(best_dir == 0 || best_i2_end < 0)
@@ -4987,21 +4998,19 @@ void DrawFib30Line(const MqlRates &rates[])
       ObjectSetString(0, live + "Z0", OBJPROP_TOOLTIP, "База Z / 100% (экстремум коррекции ИКИ)");
       ObjectSetString(0, live + "Z1", OBJPROP_TOOLTIP, "Кончик Z / 0%");
 
-      // Z как у Pro: org1 → tip1 → corr → tip (четыре точки = буква Z + продолжение)
-      if(mv.has_iki_z)
+      // Pro: одна диагональ от базы коррекции ИКИ к tip (+ горизонталь 100% на базе).
+      // Ноги org1→tip1→corr — только в ShowBasePathDebug (иначе Z раздувается).
+      DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, ColorContinuedMove, zs, zw);
+      ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP, "Безоткатное: база коррекции ИКИ → tip");
+      if(ShowBasePathDebug && mv.has_iki_z)
       {
-         DrawTrendSegment(live + "ZA", mv.z_t_org1, mv.z_org1, mv.z_t_tip1, mv.z_tip1, ColorContinuedMove, zs, zw);
-         DrawTrendSegment(live + "ZB", mv.z_t_tip1, mv.z_tip1, mv.z_t_corr, mv.z_corr, ColorContinuedMove, zs, zw);
-         DrawTrendSegment(live + "ZC", mv.z_t_corr, mv.z_corr, time_0, price_0, ColorContinuedMove, zs, zw);
-         ObjectSetString(0, live + "ZA", OBJPROP_TOOLTIP, "Z ИКИ: импульс1");
-         ObjectSetString(0, live + "ZB", OBJPROP_TOOLTIP, "Z ИКИ: коррекция");
-         ObjectSetString(0, live + "ZC", OBJPROP_TOOLTIP, "Z ИКИ: импульс2 / безоткатное");
-         if(ObjExists(live + "ZD")) ObjectDelete(0, live + "ZD");
+         DrawTrendSegment(live + "ZA", mv.z_t_org1, mv.z_org1, mv.z_t_tip1, mv.z_tip1, ColorBasePath, STYLE_DOT, 1);
+         DrawTrendSegment(live + "ZB", mv.z_t_tip1, mv.z_tip1, mv.z_t_corr, mv.z_corr, ColorBasePath, STYLE_DOT, 1);
+         ObjectSetString(0, live + "ZA", OBJPROP_TOOLTIP, "отладка ИКИ: импульс1");
+         ObjectSetString(0, live + "ZB", OBJPROP_TOOLTIP, "отладка ИКИ: коррекция");
       }
       else
       {
-         DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, ColorContinuedMove, zs, zw);
-         ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP, "Безоткатное (без полного ИКИ)");
          if(ObjExists(live + "ZA")) ObjectDelete(0, live + "ZA");
          if(ObjExists(live + "ZB")) ObjectDelete(0, live + "ZB");
          if(ObjExists(live + "ZC")) ObjectDelete(0, live + "ZC");
