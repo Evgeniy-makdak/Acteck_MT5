@@ -1,7 +1,14 @@
-# ASmart 3.9 (MT5)
+# ASmart 4.0 (MT5)
 
-`MQL5/Experts/ASmart 3.9.mq5` — `ASmart39_`
+`MQL5/Experts/ASmart 4.0.mq5` — префикс объектов `ASmart40_`
 
-**Z = ZigZag-плечо как Pro:** лой перед первым хаем у глобального tip → tip. Глубина = `SpeedPreset`. Одна диагональ.
+## Sniper Pro: якорь сигналов = ИКИ-КЗ
 
-Снять EA → F7 → навесить заново. SpeedPreset как в Pro (обычно CALM).
+| Модуль | Роль |
+|--------|------|
+| **ИКИ-КЗ** | Структура + **A/B/C** (пробой / ложный пробой / ретест) |
+| **Z** | ZigZag-плечо на ТФ графика (синий вверх / красный вниз) |
+| **Legacy CZ** | ATR-консолидация — **выкл.** (`UseLegacyCZSignals=false`) |
+
+Снять EA → F7 → навесить **ASmart 4.0**. Пресеты: `MQL5/Presets/Acteck_v4.0_*.set`.  
+Карточка: `UserGuide_ASmart_4.0_RU.txt`. PDF: `ASmart_4.0_Manual_RU.pdf`.

@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 3.9                                                       |
+//|  ASmart 4.0                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
-//|  Sniper: IKI Z polyline (org→tip1→corr→tip) + thin KZ             |
+//|  Sniper Pro: A/B/C от ИКИ-КЗ (не ATR-консолидация CZ)             |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 3.9 — Z как Pro: ZigZag-плечо (лой→хай) по SpeedPreset"
-#property version   "3.90"
+#property description "ASmart 4.0 — сигналы A/B/C от ИКИ-КЗ как Sniper Pro"
+#property version   "4.00"
 
-#define EA_VERSION "3.9"
+#define EA_VERSION "4.0"
 
 
 //=========================
@@ -93,10 +93,14 @@ input bool                 UsePrevDayLevels     = true;
 input int                  ShowLevelsLenBars    = 500;
 input bool                 BalanceUseOpenPrice  = false; // optional
 
-// Zones
-input int                  CZ_LookbackN         = 20;
-input int                  CZ_ATR_Period        = 14;
-input double               CZ_ATR_K             = 1.0;
+// Zones / signals (4.0: якорь = ИКИ-КЗ; CZ — только legacy)
+input bool                 UseIKI_KZ_ForSignals = true;   // true = A/B/C от ИКИ-КЗ (Sniper Pro)
+input bool                 UseLegacyCZSignals   = false;  // true = старый ATR-бокс CZ (не Pro)
+input int                  CZ_LookbackN         = 20;     // legacy CZ
+input int                  CZ_ATR_Period        = 14;     // legacy CZ / ATR handle
+input double               CZ_ATR_K             = 1.0;    // legacy CZ
+input double               KZ_TradeBandATR      = 0.35;   // полуширина торгового пояса вокруг уровня КЗ
+input double               KZ_MaxDistanceATR    = 3.0;    // макс. дистанция цены до активной КЗ (×ATR)
 input int                  BreakCloseOffset     = 5;      // points
 input int                  RetestDepth          = 5;      // points
 input double               WickRatio            = 2.0;
@@ -156,7 +160,7 @@ input int                  MaxPositions         = 1;
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart39";
+input string               CommentPrefix        = "ASmart40";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -166,7 +170,7 @@ input int                  ZZ_Backstep          = 3;
 input bool                 ShowSwingLine        = false; // UI: меньше линий
 
 // Graphics / alerts
-input bool                 ShowZones            = true;
+input bool                 ShowZones            = false; // торговый пояс A/B/C (выкл. — как Pro: только тонкие КЗ)
 input bool                 ShowEntryMarker      = true;
 input bool                 ShowEntrySLTPLines   = true;   // при стрелке: гориз. SL + ТП по Сейфу
 input bool                 KeepSignalHistory    = true;  // стрелка/SL/Сейф остаются (вкл. после смены вкладки)
@@ -285,7 +289,8 @@ input color                ColorFib30           = clrDodgerBlue; // сплошн
 input color                ColorFib30Old        = clrOrange;     // «30» прошлого хода (память до след. дня)
 input color                ColorModelFib382     = clrOrangeRed;  // линия/зона 38.2
 input color                ColorModelFib236     = clrMediumOrchid; // линия/зона 23.6
-input color                ColorContinuedMove   = clrDodgerBlue; // синий пунктир Z (как Pro)
+input color                ColorContinuedMove   = clrDodgerBlue; // Z вверх (лой→хай): синий пунктир
+input color                ColorContinuedMoveDn = clrCrimson;    // Z вниз (хай→лой): красный пунктир
 input color                ColorKZ              = clrDodgerBlue; // КЗ сопротивление (тонкая линия)
 input color                ColorKZ_Support      = clrLime;       // КЗ поддержка (тонкая линия, как Pro)
 input int                  WidthContinuedMove   = 2;      // толщина пунктира Z (1..4)
@@ -661,6 +666,10 @@ struct SConsolidationZone
    double   low;
    int      id;
    int      trades_done;
+   // 4.0 ИКИ-КЗ
+   double   kz_level;   // точный уровень КЗ (imp_start)
+   int      kz_dir;     // +1 поддержка / -1 сопротивление
+   int      src_kind;   // SK_KZ или 0=legacy CZ
 };
 
 struct SBrokenZone
@@ -688,6 +697,9 @@ struct SPCState
 SConsolidationZone g_zone;
 SBrokenZone        g_broken;
 SPCState           g_pc_states[];
+// ИКИ-КЗ id каждый бар пересоздаётся → spent храним по уровню+направлению
+struct SSpentKzLevel { double level; int dir; datetime when; };
+SSpentKzLevel      g_spentKz[];
 
 //=========================
 // Utilities
@@ -2700,12 +2712,121 @@ bool IsConsolidation(const MqlRates &rates[], double &zone_high, double &zone_lo
    return (range <= CZ_ATR_K * atr);
 }
 
+bool IsKzLevelSpent(const double lvl, const int dir)
+{
+   if(lvl <= 0.0 || dir == 0) return false;
+   double atr = 0.0;
+   GetBufferValue(g_hATR_Filter, 1, atr);
+   const double near = MathMax(PointValue() * 8.0, (atr > 0.0 ? 0.20 * atr : PointValue() * 20.0));
+   const int max_age = MathMax(20, BrokenZoneMaxBars) * PeriodSeconds(Timeframe);
+   const datetime now_t = TimeCurrent();
+   for(int i = ArraySize(g_spentKz) - 1; i >= 0; i--)
+   {
+      if(g_spentKz[i].dir != dir) continue;
+      if(MathAbs(g_spentKz[i].level - lvl) > near) continue;
+      if(g_spentKz[i].when > 0 && max_age > 0 && (now_t - g_spentKz[i].when) > max_age)
+         continue; // устарело — можно снова торговать этот уровень
+      return true;
+   }
+   return false;
+}
+
+void MarkKzLevelSpent(const double lvl, const int dir)
+{
+   if(lvl <= 0.0 || dir == 0) return;
+   if(IsKzLevelSpent(lvl, dir)) return;
+   const int n = ArraySize(g_spentKz);
+   ArrayResize(g_spentKz, n + 1);
+   g_spentKz[n].level = lvl;
+   g_spentKz[n].dir = dir;
+   g_spentKz[n].when = TimeCurrent();
+   if(ArraySize(g_spentKz) > 24)
+   {
+      for(int i = 0; i < 12; i++)
+         g_spentKz[i] = g_spentKz[i + 12];
+      ArrayResize(g_spentKz, 12);
+   }
+}
+
+// Ближайшая ИКИ-КЗ → торговый пояс для A/B/C (Sniper Pro)
+bool FindTradeableIKI_KZ(const MqlRates &rates[],
+                         double &zh, double &zl, double &lvl, int &dir,
+                         datetime &t1, int &sid)
+{
+   const int nr = ArraySize(rates);
+   if(nr < 3) return false;
+
+   double atr = 0.0;
+   GetBufferValue(g_hATR_Filter, 1, atr);
+   const double price = rates[1].close;
+   const double max_d = (atr > 0.0 && KZ_MaxDistanceATR > 0.0)
+                        ? (KZ_MaxDistanceATR * atr)
+                        : 1.0e100;
+   const double half = MathMax(PointValue() * 8.0,
+                               (atr > 0.0 ? MathMax(0.15, KZ_TradeBandATR) * atr : PointValue() * 30.0));
+
+   int best = -1;
+   double best_dist = 1.0e100;
+   for(int i = 0; i < ArraySize(g_structZones); i++)
+   {
+      if(g_structZones[i].kind != SK_KZ) continue;
+      if(!g_structZones[i].valid && !g_structZones[i].active) continue;
+
+      const double L = (g_structZones[i].imp_start != 0.0)
+                       ? g_structZones[i].imp_start
+                       : (0.5 * (g_structZones[i].high + g_structZones[i].low));
+      if(L <= 0.0) continue;
+      if(IsKzLevelSpent(L, g_structZones[i].direction)) continue;
+      if(g_broken.active && g_broken.direction != 0 &&
+         MathAbs(0.5 * (g_broken.high + g_broken.low) - L) <= MathMax(PointValue()*8.0, half*0.5))
+         continue;
+
+      const double d = MathAbs(price - L);
+      if(d > max_d) continue;
+      if(d < best_dist)
+      {
+         best_dist = d;
+         best = i;
+      }
+   }
+   if(best < 0) return false;
+
+   lvl = (g_structZones[best].imp_start != 0.0)
+         ? g_structZones[best].imp_start
+         : (0.5 * (g_structZones[best].high + g_structZones[best].low));
+   dir = g_structZones[best].direction;
+   t1  = g_structZones[best].t1;
+   sid = g_structZones[best].id;
+
+   // торговый пояс: из структуры, иначе ± KZ_TradeBandATR
+   zh = g_structZones[best].high;
+   zl = g_structZones[best].low;
+   if(zh <= zl || (zh - zl) < half * 0.5)
+   {
+      zh = lvl + half;
+      zl = lvl - half;
+   }
+   // сопротивление: чуть больше пояса сверху; поддержка — снизу (как при PushStructureZoneEx)
+   if(dir < 0)
+   {
+      zh = MathMax(zh, lvl + half * 0.65);
+      zl = MathMin(zl, lvl - half * 0.35);
+   }
+   else if(dir > 0)
+   {
+      zh = MathMax(zh, lvl + half * 0.35);
+      zl = MathMin(zl, lvl - half * 0.65);
+   }
+   return true;
+}
+
 void DrawZoneObject(const SConsolidationZone &z, const bool broken, const datetime right_time)
 {
    if(!ShowZones)
       return;
 
-   string name = Prefix() + "CZ_" + IntegerToString(z.id);
+   const string tag = (z.src_kind == SK_KZ) ? "KZTRADE_" : "CZ_";
+   string name = Prefix() + tag + IntegerToString(z.id);
 
    datetime t1 = z.start;
    datetime t2 = right_time;
@@ -2717,7 +2838,7 @@ void DrawZoneObject(const SConsolidationZone &z, const bool broken, const dateti
    if(broken && !MarkInk(z.start, ink))
    {
       if(ObjExists(name)) ObjectDelete(0, name);
-      string rn_old = Prefix() + "CZ_REACT_" + IntegerToString(z.id);
+      string rn_old = Prefix() + tag + "REACT_" + IntegerToString(z.id);
       if(ObjExists(rn_old)) ObjectDelete(0, rn_old);
       return;
    }
@@ -2725,9 +2846,13 @@ void DrawZoneObject(const SConsolidationZone &z, const bool broken, const dateti
    color fill = ToARGB(clr, (int)(40.0 * (broken ? ink : 1.0)));
 
    DrawRect(name, t1, z.high, t2, z.low, fill, true, true);
+   ObjectSetString(0, name, OBJPROP_TOOLTIP,
+                   (z.src_kind == SK_KZ)
+                   ? StringFormat("Торговый пояс ИКИ-КЗ %s @ %.5f", (z.kz_dir > 0 ? "поддержка" : "сопротивление"), z.kz_level)
+                   : "Legacy CZ (ATR-консолидация)");
 
    // Reaction line: nearest boundary to current price
-   string rn = Prefix() + "CZ_REACT_" + IntegerToString(z.id);
+   string rn = Prefix() + tag + "REACT_" + IntegerToString(z.id);
 
    if(broken)
    {
@@ -4984,10 +5109,14 @@ void DrawFib30Line(const MqlRates &rates[])
       if(zw < 1) zw = 1;
       if(zw > 4) zw = 4;
       ENUM_LINE_STYLE zs = (zw > 1) ? STYLE_DASH : STYLE_DOT;
-      // риски 100%/0%: база = коррекция ИКИ (как горизонт 158.308 у Pro)
-      DrawHLineSegment(live + "Z0", h0a, h0b, price_100, ColorContinuedMove, zs, zw, "");
-      DrawHLineSegment(live + "Z1", h1a, h1b, price_0, ColorContinuedMove, zs, zw, "");
-      ObjectSetString(0, live + "Z0", OBJPROP_TOOLTIP, "База Z / 100% (экстремум коррекции ИКИ)");
+      // UP-импульс (лой→хай) = синий; DOWN-импульс (хай→лой) = красный
+      const color zcol = (mv.dir < 0) ? ColorContinuedMoveDn : ColorContinuedMove;
+      // риски 100%/0%: база = origin плеча, tip = 0%
+      DrawHLineSegment(live + "Z0", h0a, h0b, price_100, zcol, zs, zw, "");
+      DrawHLineSegment(live + "Z1", h1a, h1b, price_0, zcol, zs, zw, "");
+      ObjectSetString(0, live + "Z0", OBJPROP_TOOLTIP,
+                      (mv.dir < 0) ? "База Z / 100% (хай перед нисходящим ходом)"
+                                   : "База Z / 100% (лой перед восходящим ходом)");
       ObjectSetString(0, live + "Z1", OBJPROP_TOOLTIP, "Кончик Z / 0%");
 
       // Pro: строго ОДНА диагональ origin→tip (+ риски 100%/0%)
@@ -4995,12 +5124,14 @@ void DrawFib30Line(const MqlRates &rates[])
       if(ObjExists(live + "ZA")) ObjectDelete(0, live + "ZA");
       if(ObjExists(live + "ZB")) ObjectDelete(0, live + "ZB");
       if(ObjExists(live + "ZC")) ObjectDelete(0, live + "ZC");
-      DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, ColorContinuedMove, zs, zw);
-      ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP, "Z Pro: ZigZag-плечо (лой→хай) по SpeedPreset");
+      DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, zcol, zs, zw);
+      ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP,
+                      (mv.dir < 0) ? "Z вниз: хай→лой (ожидание откупа / разворот вверх у «30»)"
+                                   : "Z вверх: лой→хай (ожидание продаж / разворот вниз у «30»)");
 
       if(ShowTipZeroLabel)
       {
-         DrawText(live + "TIP", h1b, price_0, "-0.00", ColorContinuedMove, ANCHOR_LEFT_UPPER);
+         DrawText(live + "TIP", h1b, price_0, "-0.00", zcol, ANCHOR_LEFT_UPPER);
          ObjectSetInteger(0, live + "TIP", OBJPROP_FONTSIZE, 8);
          ObjectSetString(0, live + "TIP", OBJPROP_TOOLTIP, "Конец импульса (0%)");
       }
@@ -5395,7 +5526,8 @@ void ResetModelZone(SModelZone &z)
 // 3) Пробитие ближайшей КЗ: крайняя точка действительного отката → новая КЗ.
 void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
 {
-   if(!ShowPullbackZones && !ShowAll12Patterns)
+   // 4.0: КЗ нужны и для сигналов A/B/C, даже если линии на графике скрыты
+   if(!ShowPullbackZones && !ShowAll12Patterns && !(UseIKI_KZ_ForSignals && !UseLegacyCZSignals))
       return;
 
    const int nr = ArraySize(rates);
@@ -7168,6 +7300,16 @@ void ProcessActiveZone(const MqlRates &rates[])
    bool breakout_up = (bar.close >= (g_zone.high + offset));
    bool breakout_dn = (bar.close <= (g_zone.low - offset));
 
+   // ИКИ-КЗ (Pro): A только на пробой «сквозь» зону —
+   // сопротивление → вверх (BUY), поддержка → вниз (SELL).
+   if(g_zone.src_kind == SK_KZ && g_zone.kz_dir != 0)
+   {
+      if(g_zone.kz_dir < 0)      // сопротивление
+         breakout_dn = false;
+      else if(g_zone.kz_dir > 0) // поддержка
+         breakout_up = false;
+   }
+
    if(breakout_up || breakout_dn)
    {
       int dir = breakout_up ? 1 : -1;
@@ -7183,6 +7325,8 @@ void ProcessActiveZone(const MqlRates &rates[])
       datetime break_time = rates[0].time;
       g_lastZoneInvalidationTime = break_time;
       DrawZoneObject(g_zone, true, break_time);
+      if(g_zone.src_kind == SK_KZ)
+         MarkKzLevelSpent(g_zone.kz_level, g_zone.kz_dir);
 
       // move to broken zone for retest scenario (Signal C may be enabled even if A is disabled)
       g_broken.active = g_EnableSignalC;
@@ -7340,15 +7484,74 @@ void ProcessBrokenZone(const MqlRates &rates[])
 
 //=========================
 // Zone update on new bar
+// 4.0: по умолчанию активная зона = ближайшая ИКИ-КЗ (Sniper Pro).
+// Legacy CZ (ATR-консолидация) — только если UseLegacyCZSignals=true.
 //=========================
 void UpdateZones(const MqlRates &rates[])
 {
-   // Update / create active zone
+   const int sec = PeriodSeconds(Timeframe);
+   datetime t2 = rates[0].time + (datetime)(sec * 50);
+   const bool iki = (UseIKI_KZ_ForSignals && !UseLegacyCZSignals);
+
+   if(iki)
+   {
+      double zh=0, zl=0, lvl=0;
+      int dir=0, sid=0;
+      datetime t1=0;
+
+      if(g_lastZoneInvalidationTime == rates[0].time && !g_zone.active)
+         return;
+
+      if(!FindTradeableIKI_KZ(rates, zh, zl, lvl, dir, t1, sid))
+      {
+         g_zone.active = false;
+         return;
+      }
+
+      double atr = 0.0;
+      GetBufferValue(g_hATR_Filter, 1, atr);
+      const double near = MathMax(PointValue() * 8.0, (atr > 0.0 ? 0.20 * atr : PointValue() * 20.0));
+      const bool same = (g_zone.active && g_zone.src_kind == SK_KZ &&
+                         g_zone.kz_dir == dir && MathAbs(g_zone.kz_level - lvl) <= near);
+
+      if(same)
+      {
+         g_zone.high = zh;
+         g_zone.low  = zl;
+         g_zone.kz_level = lvl;
+         g_zone.id = (sid > 0 ? sid : g_zone.id);
+         g_zone.last_update = rates[0].time;
+         DrawZoneObject(g_zone, false, t2);
+         return;
+      }
+
+      g_zoneSeq++;
+      g_zone.active = true;
+      g_zone.id = (sid > 0 ? sid : g_zoneSeq);
+      g_zone.high = zh;
+      g_zone.low  = zl;
+      g_zone.kz_level = lvl;
+      g_zone.kz_dir = dir;
+      g_zone.src_kind = SK_KZ;
+      g_zone.trades_done = 0;
+      g_zone.last_update = rates[0].time;
+      g_zone.start = (t1 > 0 ? t1 : rates[MathMin(ArraySize(rates)-1, 20)].time);
+      DrawZoneObject(g_zone, false, t2);
+      Log(StringFormat("IKI-KZ trade zone #%d %s @%.5f band[%.5f..%.5f]",
+                       g_zone.id,
+                       (dir > 0 ? "support" : "resist"),
+                       lvl, zl, zh));
+      return;
+   }
+
+   // ----- Legacy CZ (ATR consolidation) -----
+   if(!UseLegacyCZSignals)
+      return;
+
    if(!g_zone.active)
    {
-   /* guard: avoid creating a new zone in the same bar where the previous zone was invalidated */
-   if(g_lastZoneInvalidationTime == rates[0].time)
-      return;
+      if(g_lastZoneInvalidationTime == rates[0].time)
+         return;
 
       double zh=0, zl=0;
       if(IsConsolidation(rates, zh, zl))
@@ -7358,34 +7561,26 @@ void UpdateZones(const MqlRates &rates[])
          g_zone.id = g_zoneSeq;
          g_zone.high = zh;
          g_zone.low  = zl;
+         g_zone.kz_level = 0.0;
+         g_zone.kz_dir = 0;
+         g_zone.src_kind = 0;
          g_zone.trades_done = 0;
          g_zone.last_update = rates[0].time;
-         // start at oldest bar of window
          int start_shift = 1 + CZ_LookbackN - 1;
          g_zone.start = rates[start_shift].time;
-
-         // extend drawing to the right
-         int sec = PeriodSeconds(Timeframe);
-         datetime t2 = rates[0].time + (datetime)(sec * 50);
          DrawZoneObject(g_zone, false, t2);
-         Log(StringFormat("New zone #%d created: [%.5f..%.5f]", g_zone.id, g_zone.low, g_zone.high));
+         Log(StringFormat("Legacy CZ #%d created: [%.5f..%.5f]", g_zone.id, g_zone.low, g_zone.high));
       }
    }
    else
    {
-      // update bounds only if consolidation still holds
       double zh=0, zl=0;
       if(IsConsolidation(rates, zh, zl))
       {
          g_zone.high = zh;
          g_zone.low  = zl;
       }
-
       g_zone.last_update = rates[0].time;
-
-      // extend drawing to the right
-      int sec = PeriodSeconds(Timeframe);
-      datetime t2 = rates[0].time + (datetime)(sec * 50);
       DrawZoneObject(g_zone, false, t2);
    }
 }
@@ -7745,14 +7940,25 @@ void ProcessOnBarClose()
 
    DrawDayLevels(rates[0].time);
 
-   // Sniper context first: sessions / liquidity / sight / probability HUD
+   // Sniper context first: sessions / liquidity / sight / probability HUD + ИКИ-КЗ
    RefreshSniperContext(rates);
 
-   // IMPORTANT: process signals/invalidation BEFORE updating zone bounds to avoid absorbing the breakout bar into zone boundaries.
-   ProcessActiveZone(rates);
-   ProcessBrokenZone(rates);
-   TryPDT1EntryFromRM(rates);
-   UpdateZones(rates);
+   if(UseIKI_KZ_ForSignals && !UseLegacyCZSignals)
+   {
+      // Pro: сначала синхронизировать торговый пояс с ИКИ-КЗ, затем A/B/C
+      UpdateZones(rates);
+      ProcessActiveZone(rates);
+      ProcessBrokenZone(rates);
+      TryPDT1EntryFromRM(rates);
+   }
+   else
+   {
+      // Legacy CZ: process BEFORE update — иначе пробойный бар втянется в границы бокса
+      ProcessActiveZone(rates);
+      ProcessBrokenZone(rates);
+      TryPDT1EntryFromRM(rates);
+      UpdateZones(rates);
+   }
    UpdateSwingLine(rates);
    AgeSignalObjects();
    PrunePastDecisionMarks();
@@ -7930,7 +8136,11 @@ int OnInit()
 
    // reset
    g_zone.active = false;
+   g_zone.kz_level = 0.0;
+   g_zone.kz_dir = 0;
+   g_zone.src_kind = 0;
    g_broken.active = false;
+   ArrayResize(g_spentKz, 0);
 
    g_lastBarTime = 0;
    g_lastTradeBarTime = 0;
@@ -8001,6 +8211,12 @@ int OnInit()
 
    if(SignalsOnlyOnBarClose)
       Log("SignalsOnlyOnBarClose=true: стрелки A/B/C только после ЗАКРЫТИЯ свечи.");
+   if(UseIKI_KZ_ForSignals && !UseLegacyCZSignals)
+      Log("A/B/C: ИКИ-КЗ (Sniper Pro). Legacy CZ выключен.");
+   else if(UseLegacyCZSignals)
+      Log("A/B/C: LEGACY CZ (ATR-консолидация) — не режим Pro.");
+   else
+      Log("WARNING: UseIKI_KZ_ForSignals=false и UseLegacyCZSignals=false — зональные A/B/C неактивны.");
    Log(StringFormat("Speed=%s depth=%d | symbol=%s | 12pat=%d | virtualTF=%d (%s+%s) | RSI=%d | bounds=%d",
                     SpeedPresetName(), EffectiveSwingDepth(), _Symbol,
                     (int)ShowAll12Patterns, (int)UseVirtualTF,
