@@ -1,1 +1,1 @@
-ASmart 3.8 — Acteck_v3.8_<PAIR>_<mode>.set
+ASmart 3.9 — Acteck_v3.9_<PAIR>_<mode>.set

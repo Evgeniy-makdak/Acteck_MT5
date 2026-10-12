@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 3.8                                                       |
+//|  ASmart 3.9                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: IKI Z polyline (org→tip1→corr→tip) + thin KZ             |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 3.8 — Z: база=последняя коррекция ИКИ → tip (как Pro)"
-#property version   "3.80"
+#property description "ASmart 3.9 — Z как Pro: ZigZag-плечо (лой→хай) по SpeedPreset"
+#property version   "3.90"
 
-#define EA_VERSION "3.8"
+#define EA_VERSION "3.9"
 
 
 //=========================
@@ -156,7 +156,7 @@ input int                  MaxPositions         = 1;
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart38";
+input string               CommentPrefix        = "ASmart39";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -273,7 +273,7 @@ input bool                 ShowZoneFill         = false;  // заливка зо
 input bool                 ShowFib30            = true;   // вспомог. линия «30» (UX ASmart)
 input bool                 ShowModelFib382      = false;  // базовая модель: линия 38.2% (выкл. — не нужна для входа)
 input bool                 ShowModelFib236      = false;  // каскад: линия 23.6% (выкл. по умолч.)
-input bool                 ShowContinuedMoveZ   = true;   // Z: диагональ база(корр.ИКИ)→tip как Pro
+input bool                 ShowContinuedMoveZ   = true;   // Z: диагональ ZigZag-плеча как Pro
 input bool                 ShowTipZeroLabel     = true;   // подпись «-0.00» у кончика хода (как Pro)
 input bool                 ShowBasePathDebug    = false;  // ОТЛАДКА: ломаная узлов + ✓/✗/◇
 input int                  BasePathMaxBars      = 80;     // глубина отладки пути (баров)
@@ -1438,6 +1438,10 @@ int ExpandBaseEvents(const SBaseBar &bases[], const MqlRates &rates[], SBaseEven
 
 bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
 {
+   // Z как Sniper Pro: одно плечо ZigZag (последний значимый лой → хай),
+   // глубина = SpeedPreset/IndicatorSpeed (EffectiveSwingDepth).
+   // Среди плеч, чей tip ≈ глобальный экстремум, берём САМОЕ ДЛИННОЕ
+   // (база ~158.305→пик, а не короткое плечо с Frankfurt ~158.48).
    m.valid = false;
    m.retraced_30 = false;
    m.cancelled_50 = false;
@@ -1461,195 +1465,183 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    g_lastImpulseDir   = 0;
 
    const int nr = ArraySize(rates);
-   if(nr < 30)
+   if(nr < 40)
       return false;
 
    const double complete_need = MathMax(0.08, PD_CompletePullbackPct / 100.0);
    const double retrace_on = MathMax(complete_need, PD_MinCorrectionPct / 100.0);
    const double cancel_at = MathMax(retrace_on + 0.05, PD_CancelRetracePct / 100.0);
-   const int look = MathMin(nr, MathMax(50, StructureLookbackBars));
+
+   SPivot swings[];
+   if(!BuildSwingPoints(rates, swings, 64))
+      return false;
+   const int ns = ArraySize(swings);
+   if(ns < 2)
+      return false;
+
    double atr = 0.0;
    GetBufferValue(g_hATR_Filter, 1, atr);
-   const double eps = MathMax(PointValue() * 2.0, (atr > 0.0 ? 0.05 * atr : PointValue() * 5.0));
+   const double eps = MathMax(PointValue() * 3.0, (atr > 0.0 ? 0.08 * atr : PointValue() * 8.0));
 
-   SBaseBar bases[];
-   const int nb = BuildBaseBars(rates, look - 1, bases);
-   if(nb < 6)
-      return false;
-
-   SBaseEvent ev[];
-   const int ne = ExpandBaseEvents(bases, rates, ev);
-   if(ne < 6)
-      return false;
-
-   // ИКИ → база Z = экстремум ПОСЛЕДНЕЙ подходящей коррекции (не самый ранний гигант).
-   // На графике Pro: диагональ corr→tip + горизонт на corr.
-   int best_i2_end = -1;
-   double best_score = 0.0;
-   int best_dir = 0;
-   double best_org1 = 0, best_tip1 = 0, best_corr = 0, best_tip = 0;
-   datetime best_t1 = 0, best_t2 = 0, best_t3 = 0, best_t4 = 0;
-   int best_i_tip = 0;
-   int best_nbase = 0;
-
-   for(int i = 5; i < ne; i++)
+   // глобальные экстремумы среди свингов
+   double g_hi = -1.0e100, g_lo = 1.0e100;
+   int g_hi_i = -1, g_lo_i = -1;
+   for(int i = 0; i < ns; i++)
    {
-      const int d2 = ev[i].dir;
-      if(d2 == 0) continue;
-      if(i + 1 < ne && ev[i + 1].dir == d2) continue; // ждём конец сегмента импульса2
+      if(swings[i].type > 0 && swings[i].p >= g_hi)
+      { g_hi = swings[i].p; g_hi_i = i; }
+      if(swings[i].type < 0 && swings[i].p <= g_lo)
+      { g_lo = swings[i].p; g_lo_i = i; }
+   }
+   if(g_hi_i < 0 || g_lo_i < 0)
+      return false;
 
-      int i2_end = i, i2_start = i;
-      for(int k = i - 1; k >= 0; k--)
+   // Допуск «тот же tip»: небольшой новый хай после пика не должен
+   // переносить базу Z на мелкий откат (Frankfurt/NY) — как у Pro.
+   const double near_tip = MathMax(eps, (atr > 0.0 ? 0.35 * atr : eps * 4.0));
+
+   int best_a = -1, best_b = -1, best_dir = 0;
+
+   // UP: первый (ранний) хай-свинг у глобального максимума → лой сразу перед ним
+   int first_hi = -1;
+   for(int i = 0; i < ns; i++)
+   {
+      if(swings[i].type > 0 && swings[i].p + near_tip >= g_hi)
+      { first_hi = i; break; }
+   }
+   if(first_hi > 0)
+   {
+      for(int j = first_hi - 1; j >= 0; j--)
       {
-         if(ev[k].dir == d2) i2_start = k;
-         else break;
-      }
-      if(i2_start < 1) continue;
-
-      int i_corr = i2_start - 1;
-      if(i_corr < 0 || ev[i_corr].dir != -d2) continue;
-      int corr_end = i_corr, corr_start = i_corr;
-      for(int k = i_corr - 1; k >= 0; k--)
-      {
-         if(ev[k].dir == -d2) corr_start = k;
-         else break;
-      }
-
-      int i1_end = corr_start - 1;
-      if(i1_end < 0 || ev[i1_end].dir != d2) continue;
-      int i1_start = i1_end;
-      for(int k = i1_end - 1; k >= 0; k--)
-      {
-         if(ev[k].dir == d2) i1_start = k;
-         else break;
-      }
-
-      double org1, tip1, corr_ext, tip2;
-      datetime t_org1, t_tip1, t_corr, t_tip2;
-
-      if(d2 > 0)
-      {
-         org1 = bases[ev[i1_start].base_i].low; t_org1 = bases[ev[i1_start].base_i].time;
-         tip1 = ev[i1_start].extreme; t_tip1 = ev[i1_start].time;
-         for(int k = i1_start; k <= i1_end; k++)
+         if(swings[j].type < 0)
          {
-            const int bi = ev[k].base_i;
-            if(bases[bi].low < org1) { org1 = bases[bi].low; t_org1 = bases[bi].time; }
-            if(ev[k].extreme > tip1) { tip1 = ev[k].extreme; t_tip1 = ev[k].time; }
+            const double sz = g_hi - swings[j].p;
+            if(sz >= MinContinuedMoveRange() && ImpulseQualified(sz, 3))
+            {
+               best_a = j;
+               best_b = first_hi;
+               best_dir = 1;
+            }
+            break;
          }
-         corr_ext = ev[corr_start].extreme; t_corr = ev[corr_start].time;
-         for(int k = corr_start; k <= corr_end; k++)
-            if(ev[k].extreme < corr_ext) { corr_ext = ev[k].extreme; t_corr = ev[k].time; }
-         if(corr_ext < org1 - eps) continue; // коррекция снесла начало
-         tip2 = tip1; t_tip2 = t_tip1;
-         for(int k = i2_start; k <= i2_end; k++)
-            if(ev[k].extreme > tip2) { tip2 = ev[k].extreme; t_tip2 = ev[k].time; }
-         if(tip2 <= tip1 + eps) continue; // второй импульс не обновил первый
       }
-      else
-      {
-         org1 = bases[ev[i1_start].base_i].high; t_org1 = bases[ev[i1_start].base_i].time;
-         tip1 = ev[i1_start].extreme; t_tip1 = ev[i1_start].time;
-         for(int k = i1_start; k <= i1_end; k++)
-         {
-            const int bi = ev[k].base_i;
-            if(bases[bi].high > org1) { org1 = bases[bi].high; t_org1 = bases[bi].time; }
-            if(ev[k].extreme < tip1) { tip1 = ev[k].extreme; t_tip1 = ev[k].time; }
-         }
-         corr_ext = ev[corr_start].extreme; t_corr = ev[corr_start].time;
-         for(int k = corr_start; k <= corr_end; k++)
-            if(ev[k].extreme > corr_ext) { corr_ext = ev[k].extreme; t_corr = ev[k].time; }
-         if(corr_ext > org1 + eps) continue;
-         tip2 = tip1; t_tip2 = t_tip1;
-         for(int k = i2_start; k <= i2_end; k++)
-            if(ev[k].extreme < tip2) { tip2 = ev[k].extreme; t_tip2 = ev[k].time; }
-         if(tip2 >= tip1 - eps) continue;
-      }
-
-      // действительная коррекция: глубина ≥ PD_CompletePullbackPct от импульса1
-      const double i1_range = MathAbs(tip1 - org1);
-      if(i1_range < MinContinuedMoveRange() * 0.5) continue;
-      const double corr_depth = MathAbs(tip1 - corr_ext);
-      if(corr_depth + 1.0e-12 < complete_need * i1_range) continue;
-
-      // продлить tip2 только пока нет встречного события (безоткатное)
-      int i_tip_ev = i2_end;
-      for(int k = i2_end + 1; k < ne; k++)
-      {
-         if(ev[k].dir != d2) break;
-         if(d2 > 0 && ev[k].extreme > tip2) { tip2 = ev[k].extreme; t_tip2 = ev[k].time; i_tip_ev = k; }
-         if(d2 < 0 && ev[k].extreme < tip2) { tip2 = ev[k].extreme; t_tip2 = ev[k].time; i_tip_ev = k; }
-      }
-
-      const double origin = corr_ext;
-      const double tip = tip2;
-      const double sz = MathAbs(tip - origin);
-      if(sz < MinContinuedMoveRange()) continue;
-
-      int nbase = 0; int last_bi = -1;
-      for(int k = corr_start; k <= i_tip_ev; k++)
-         if(ev[k].base_i != last_bi) { nbase++; last_bi = ev[k].base_i; }
-      if(!ImpulseQualified(sz, MathMax(3, nbase))) continue;
-
-      // копить кандидатов в «лучших» по tip; финальный выбор — самая СВЕЖАЯ коррекция
-      // (иначе берётся утренний гигантский ИКИ — Z слишком крупный vs Pro)
-      const bool better_tip = (best_dir == 0) ||
-         (d2 > 0 && tip > best_tip + eps) ||
-         (d2 < 0 && tip < best_tip - eps) ||
-         (MathAbs(tip - best_tip) <= eps && t_corr >= best_t3);
-      if(!better_tip) continue;
-      // при том же tip предпочитаем более позднюю базу коррекции
-      if(best_dir != 0 && MathAbs(tip - best_tip) <= eps && t_corr < best_t3)
-         continue;
-
-      best_score = sz;
-      best_dir = d2;
-      best_org1 = org1; best_tip1 = tip1; best_corr = corr_ext; best_tip = tip;
-      best_t1 = t_org1; best_t2 = t_tip1; best_t3 = t_corr; best_t4 = t_tip2;
-      best_i_tip = ev[i_tip_ev].rate_idx;
-      best_nbase = nbase;
-      best_i2_end = i_tip_ev;
    }
 
-   if(best_dir == 0 || best_i2_end < 0)
+   // DOWN: симметрично — первый лой у глобального минимума → хай перед ним
+   int first_lo = -1;
+   for(int i = 0; i < ns; i++)
+   {
+      if(swings[i].type < 0 && swings[i].p - near_tip <= g_lo)
+      { first_lo = i; break; }
+   }
+   bool take_dn = false;
+   if(first_lo > 0)
+   {
+      for(int j = first_lo - 1; j >= 0; j--)
+      {
+         if(swings[j].type > 0)
+         {
+            const double sz = swings[j].p - g_lo;
+            if(sz >= MinContinuedMoveRange() && ImpulseQualified(sz, 3))
+            {
+               // если есть и up и down — берём более новый tip (как активный ход)
+               if(best_dir == 0)
+                  take_dn = true;
+               else if(swings[first_lo].t >= swings[best_b].t)
+                  take_dn = true;
+               if(take_dn)
+               {
+                  best_a = j;
+                  best_b = first_lo;
+                  best_dir = -1;
+               }
+            }
+            break;
+         }
+      }
+   }
+
+   if(best_dir == 0 || best_a < 0)
       return false;
 
    m.valid = true;
-   m.has_iki_z = true;
    m.dir = best_dir;
-   m.origin = best_corr;       // 100% = база после коррекции ИКИ
-   m.tip = best_tip;
-   m.t_origin = best_t3;
-   m.t_tip = best_t4;
-   m.i_tip = best_i_tip;
+   m.origin = swings[best_a].p;
+   m.tip = (best_dir > 0) ? g_hi : g_lo;
+   m.t_origin = swings[best_a].t;
+   m.t_tip = swings[best_b].t;
+   // tip time = бар глобального экстремума (может быть позже first_hi)
+   if(best_dir > 0)
+   {
+      for(int i = 0; i < ns; i++)
+         if(swings[i].type > 0 && MathAbs(swings[i].p - g_hi) <= PointValue())
+            m.t_tip = swings[i].t;
+   }
+   else
+   {
+      for(int i = 0; i < ns; i++)
+         if(swings[i].type < 0 && MathAbs(swings[i].p - g_lo) <= PointValue())
+            m.t_tip = swings[i].t;
+   }
    m.range = MathAbs(m.origin - m.tip);
-   m.base_count = best_nbase;
-   m.z_org1 = best_org1;
-   m.z_tip1 = best_tip1;
-   m.z_corr = best_corr;
-   m.z_t_org1 = best_t1;
-   m.z_t_tip1 = best_t2;
-   m.z_t_corr = best_t3;
+   m.base_count = MathMax(3, EffectiveSwingDepth());
+   m.has_iki_z = false;
 
-   // дотянуть tip по сырым барам после i_tip
+   // индекс бара tip
+   m.i_tip = 1;
+   for(int i = 0; i < nr; i++)
+   {
+      if(rates[i].time == m.t_tip)
+      { m.i_tip = i; break; }
+   }
+
+   // дотянуть tip новыми экстремумами, пока нет смены структуры (новый встречный свинг глубже)
    for(int i = m.i_tip - 1; i >= 1; i--)
    {
-      double atr_i = 0.0;
-      GetBufferValue(g_hATR_Filter, i, atr_i);
-      MqlRates prevb = rates[(i + 1 < nr) ? (i + 1) : i];
-      if(m.dir > 0 && rates[i].high > m.tip && BarExtendsContinuedTip(1, rates[i], prevb, m.tip, atr_i))
+      if(m.dir > 0 && rates[i].high > m.tip + eps * 0.25)
       {
          m.tip = rates[i].high;
          m.i_tip = i;
          m.t_tip = rates[i].time;
          m.range = MathAbs(m.origin - m.tip);
       }
-      else if(m.dir < 0 && rates[i].low < m.tip && BarExtendsContinuedTip(-1, rates[i], prevb, m.tip, atr_i))
+      else if(m.dir < 0 && rates[i].low < m.tip - eps * 0.25)
       {
          m.tip = rates[i].low;
          m.i_tip = i;
          m.t_tip = rates[i].time;
          m.range = MathAbs(m.origin - m.tip);
+      }
+   }
+
+   // если после tip есть подтверждённый встречный свинг, не удлинять через него —
+   // tip уже на swings[best_b], дотяжка только до следующего противоположного pivot time
+   for(int i = best_b + 1; i < ns; i++)
+   {
+      if(swings[i].type == -best_dir)
+      {
+         // встречный свинг: tip не позже этого времени
+         if(m.t_tip > swings[i].t)
+         {
+            m.t_tip = swings[best_b].t;
+            m.tip = swings[best_b].p;
+            for(int r = 0; r < nr; r++)
+               if(rates[r].time == m.t_tip) { m.i_tip = r; break; }
+            m.range = MathAbs(m.origin - m.tip);
+         }
+         break;
+      }
+      if(swings[i].type == best_dir)
+      {
+         // более новый свинг в ту же сторону — tip туда
+         if((best_dir > 0 && swings[i].p >= m.tip) || (best_dir < 0 && swings[i].p <= m.tip))
+         {
+            m.tip = swings[i].p;
+            m.t_tip = swings[i].t;
+            for(int r = 0; r < nr; r++)
+               if(rates[r].time == m.t_tip) { m.i_tip = r; break; }
+            m.range = MathAbs(m.origin - m.tip);
+         }
       }
    }
 
@@ -4998,23 +4990,13 @@ void DrawFib30Line(const MqlRates &rates[])
       ObjectSetString(0, live + "Z0", OBJPROP_TOOLTIP, "База Z / 100% (экстремум коррекции ИКИ)");
       ObjectSetString(0, live + "Z1", OBJPROP_TOOLTIP, "Кончик Z / 0%");
 
-      // Pro: одна диагональ от базы коррекции ИКИ к tip (+ горизонталь 100% на базе).
-      // Ноги org1→tip1→corr — только в ShowBasePathDebug (иначе Z раздувается).
+      // Pro: строго ОДНА диагональ origin→tip (+ риски 100%/0%)
+      DeleteObjectsWithPrefix(Prefix() + "PATH_");
+      if(ObjExists(live + "ZA")) ObjectDelete(0, live + "ZA");
+      if(ObjExists(live + "ZB")) ObjectDelete(0, live + "ZB");
+      if(ObjExists(live + "ZC")) ObjectDelete(0, live + "ZC");
       DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, ColorContinuedMove, zs, zw);
-      ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP, "Безоткатное: база коррекции ИКИ → tip");
-      if(ShowBasePathDebug && mv.has_iki_z)
-      {
-         DrawTrendSegment(live + "ZA", mv.z_t_org1, mv.z_org1, mv.z_t_tip1, mv.z_tip1, ColorBasePath, STYLE_DOT, 1);
-         DrawTrendSegment(live + "ZB", mv.z_t_tip1, mv.z_tip1, mv.z_t_corr, mv.z_corr, ColorBasePath, STYLE_DOT, 1);
-         ObjectSetString(0, live + "ZA", OBJPROP_TOOLTIP, "отладка ИКИ: импульс1");
-         ObjectSetString(0, live + "ZB", OBJPROP_TOOLTIP, "отладка ИКИ: коррекция");
-      }
-      else
-      {
-         if(ObjExists(live + "ZA")) ObjectDelete(0, live + "ZA");
-         if(ObjExists(live + "ZB")) ObjectDelete(0, live + "ZB");
-         if(ObjExists(live + "ZC")) ObjectDelete(0, live + "ZC");
-      }
+      ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP, "Z Pro: ZigZag-плечо (лой→хай) по SpeedPreset");
 
       if(ShowTipZeroLabel)
       {
