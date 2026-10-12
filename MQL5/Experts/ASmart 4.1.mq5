@@ -173,11 +173,13 @@ input bool                 ShowSwingLine        = false; // UI: меньше л�
 input bool                 ShowZones            = false; // торговый пояс A/B/C (выкл. — как Pro: только тонкие КЗ)
 input bool                 ShowEntryMarker      = true;
 input bool                 ShowEntrySLTPLines   = true;   // при стрелке: гориз. SL + ТП по Сейфу
-input bool                 KeepSignalHistory    = true;  // стрелка/SL/Сейф остаются (вкл. после смены вкладки)
+input bool                 KeepSignalHistory    = true;  // SL/Сейф + последняя стрелка после смены вкладки
 input bool                 FadeOldMarkings      = true;  // старая разметка бледнеет и исчезает
 input int                  MarkFadeAfterHours   = 18;    // после этого контур бледнеет
 input int                  MarkHideAfterHours   = 48;    // старше — скрыть (позавчера)
 input bool                 ShowArrows           = true;
+input int                  ArrowWidth           = 1;     // толщина стрелки (1..2; тонкая по умолчанию)
+input int                  SignalLabelFontSize  = 9;     // размер подписи сигнала (8..12)
 input ENUM_ALERTS_MODE     AlertsMode           = ALERTS_ONSCREEN;
 
 input color                ColorZoneActive      = clrSilver;
@@ -268,7 +270,7 @@ input bool                 BlockWeakBreakouts   = true;   // filter weak Signal 
 input double               BreakoutBodyATR_Min  = 0.35;   // min body/ATR for Signal A when BlockWeakBreakouts
 input int                  BrokenZoneMaxBars    = 80;     // expire retest window earlier than v1
 input bool                 AlignBreakoutWithSight = true; // Signal A: не входить против активного прицела
-input bool                 MarkPreciseArrows    = true;   // крупные стрелки точного входа на закрытии бара
+input bool                 MarkPreciseArrows    = false;  // чуть крупнее стрелка (всё равно ≤ ArrowWidth+1)
 
 input group "=== Sniper: Structures (ЗУ / ПД / Каскад / РМ) ==="
 input bool                 ShowDecisionZones    = true;   // ЗУ / разворотная зона модели
@@ -1241,16 +1243,22 @@ void DrawText(const string name, datetime t, double price, const string text, co
 
 void DrawArrow(const string name, datetime t, double price, bool isBuy, color clr)
 {
-   int arrow_code = isBuy ? 233 : 234; // Wingdings up/down
+   int arrow_code = isBuy ? 241 : 242; // тонкие Wingdings ▲/▼ (не «жирные» 233/234)
    if(!ObjExists(name))
       ObjectCreate(0, name, OBJ_ARROW, 0, t, price);
 
+   int w = ArrowWidth;
+   if(w < 1) w = 1;
+   if(w > 2) w = 2;
+   if(MarkPreciseArrows && w < 2) w = 2;
+
    ObjectSetInteger(0, name, OBJPROP_ARROWCODE, arrow_code);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, MarkPreciseArrows ? 3 : 2);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, w);
    ObjectSetInteger(0, name, OBJPROP_ANCHOR, isBuy ? ANCHOR_TOP : ANCHOR_BOTTOM);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 90);
 
    ObjectMove(0, name, 0, t, price);
 }
@@ -3389,32 +3397,6 @@ void DrawEntrySLTPLevels(const datetime t_sig, const int direction, const double
    }
 }
 
-void RestoreLastEntryVisuals()
-{
-   LoadLastEntrySignal();
-   if(!g_lastEntryHave)
-      return;
-   DrawEntrySLTPLevels(g_lastEntryBar, g_lastEntryDir, g_lastEntryPrice, g_lastEntrySL, g_lastEntrySafe);
-
-   // Стрелку тоже восстановить, если история включена
-   if(KeepSignalHistory && ShowEntryMarker && ShowArrows && g_lastEntryBar > 0)
-   {
-      double atr = 0.0;
-      GetBufferValue(g_hATR_Filter, 1, atr);
-      const double pad = MathMax(12.0 * PointValue(), (atr > 0.0 ? 0.12 * atr : 20.0 * PointValue()));
-      color c = (g_lastEntryDir > 0) ? ColorBuyMarker : ColorSellMarker;
-      string base = Prefix() + "SIG_" + TimeToObjectId(g_lastEntryBar) + "_LAST";
-      double arrow_price = (g_lastEntryDir > 0) ? (g_lastEntryPrice - 1.6 * pad) : (g_lastEntryPrice + 1.6 * pad);
-      DrawArrow(base + "_A", g_lastEntryBar, arrow_price, (g_lastEntryDir > 0), c);
-      ObjectSetInteger(0, base + "_A", OBJPROP_WIDTH, 4);
-      ObjectSetInteger(0, base + "_A", OBJPROP_ZORDER, 93);
-      string tip = (g_lastEntryDir > 0) ? "▲ BUY" : "▼ SELL";
-      DrawText(base + "_T", g_lastEntryBar, arrow_price, tip, (g_lastEntryDir > 0) ? clrDarkGreen : clrMaroon,
-               (g_lastEntryDir > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
-      ObjectSetInteger(0, base + "_T", OBJPROP_FONTSIZE, 12);
-   }
-}
-
 bool IsEntryLevelObjectName(const string name)
 {
    if(StringFind(name, Prefix() + "ENTRY_") == 0)
@@ -3427,10 +3409,10 @@ bool IsEntryLevelObjectName(const string name)
    return false;
 }
 
-void ClearSignalObjectsIfNeeded()
+void DeleteSignalMarkersOnly()
 {
-   // Всегда снимаем только маркеры стрелки; уровни ENTRY_ живут до нового сигнала
-   string pfx = Prefix() + "SIG_";
+   // Стрелки/подписи/заливки SIG_* — без SL/Сейф и без ENTRY_*
+   const string pfx = Prefix() + "SIG_";
    int total = ObjectsTotal(0, 0, -1);
    for(int i = total - 1; i >= 0; i--)
    {
@@ -3438,12 +3420,46 @@ void ClearSignalObjectsIfNeeded()
       if(StringFind(name, pfx) != 0)
          continue;
       if(IsEntryLevelObjectName(name))
-         continue; // не трогаем SL/Сейф от прошлой схемы имён
-      if(KeepSignalHistory)
-         continue; // копить стрелки
+         continue;
       ObjectDelete(0, name);
    }
-   ClearEntryLevelObjects(); // новый сигнал — новые уровни
+}
+
+void RestoreLastEntryVisuals()
+{
+   LoadLastEntrySignal();
+   if(!g_lastEntryHave)
+      return;
+   DrawEntrySLTPLevels(g_lastEntryBar, g_lastEntryDir, g_lastEntryPrice, g_lastEntrySL, g_lastEntrySafe);
+
+   // Одна тонкая стрелка тем же именем, что VisualizeSignal — без дубля _LAST
+   if(KeepSignalHistory && ShowEntryMarker && ShowArrows && g_lastEntryBar > 0)
+   {
+      double atr = 0.0;
+      GetBufferValue(g_hATR_Filter, 1, atr);
+      const double pad = MathMax(8.0 * PointValue(), (atr > 0.0 ? 0.08 * atr : 12.0 * PointValue()));
+      color c = (g_lastEntryDir > 0) ? ColorBuyMarker : ColorSellMarker;
+      string sig = (StringLen(g_lastEntrySig) > 0 ? g_lastEntrySig : "X");
+      string base = Prefix() + "SIG_" + TimeToObjectId(g_lastEntryBar) + "_" + sig;
+      double arrow_price = (g_lastEntryDir > 0) ? (g_lastEntryPrice - pad) : (g_lastEntryPrice + pad);
+      DrawArrow(base + "_A", g_lastEntryBar, arrow_price, (g_lastEntryDir > 0), c);
+      string tip = (g_lastEntryDir > 0) ? (sig + " BUY") : (sig + " SELL");
+      int fsz = SignalLabelFontSize;
+      if(fsz < 8) fsz = 8;
+      if(fsz > 12) fsz = 12;
+      DrawText(base + "_T", g_lastEntryBar, arrow_price, tip, (g_lastEntryDir > 0) ? clrDarkGreen : clrMaroon,
+               (g_lastEntryDir > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
+      ObjectSetString(0, base + "_T", OBJPROP_FONT, "Arial");
+      ObjectSetInteger(0, base + "_T", OBJPROP_FONTSIZE, fsz);
+   }
+}
+
+void ClearSignalObjectsIfNeeded()
+{
+   // Новая стрелка = убрать ВСЕ старые маркеры (не копить A+B+_LAST на одном баре).
+   // SL/Сейф (ENTRY_*) перерисуются ниже.
+   DeleteSignalMarkersOnly();
+   ClearEntryLevelObjects();
 }
 
 void VisualizeSignal(const string sig, const int direction, const MqlRates &bar, const double entry, const double sl, const double tp, const string status, const string chart_note)
@@ -3454,15 +3470,15 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
    ClearSignalObjectsIfNeeded();
 
    color c = (direction > 0) ? ColorBuyMarker : ColorSellMarker;
-   color fill = ToARGB(c, 40);
-   // Текст крупнее и темнее маркера — на белом фоне Lime/Tomato плохо читаются.
+   // Лёгкая заливка бара — слабее, чтобы не «пятном» перекрывать свечу
+   color fill = ToARGB(c, 22);
    const bool warn = (StringFind(chart_note, "против") >= 0 || StringFind(chart_note, "запрещает") >= 0);
    color title_c = (direction > 0) ? clrDarkGreen : clrMaroon;
    color note_c = warn ? clrFireBrick : ((direction > 0) ? clrNavy : clrDarkRed);
 
    double atr = 0.0;
    GetBufferValue(g_hATR_Filter, 1, atr);
-   const double pad = MathMax(12.0 * PointValue(), (atr > 0.0 ? 0.12 * atr : 20.0 * PointValue()));
+   const double pad = MathMax(8.0 * PointValue(), (atr > 0.0 ? 0.08 * atr : 12.0 * PointValue()));
 
    int sec = PeriodSeconds(Timeframe);
    datetime t1 = bar.time;
@@ -3473,34 +3489,42 @@ void VisualizeSignal(const string sig, const int direction, const MqlRates &bar,
    DrawRect(base + "_R", t1, bar.high, t2, bar.low, fill, true, true);
    ObjectSetString(0, base + "_R", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)c));
 
-   string tip = (direction > 0) ? ("▲ " + sig + " BUY") : ("▼ " + sig + " SELL");
-   double text_price = (direction > 0) ? (bar.low - pad) : (bar.high + pad);
-   DrawText(base + "_T", t1, text_price, tip, title_c,
-            (direction > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
-   ObjectSetString(0, base + "_T", OBJPROP_FONT, "Arial Bold");
-   ObjectSetInteger(0, base + "_T", OBJPROP_FONTSIZE, 13);
-   ObjectSetInteger(0, base + "_T", OBJPROP_ZORDER, 92);
-   ObjectSetString(0, base + "_T", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)title_c));
+   // Без ▲/▼ в тексте — стрелка OBJ_ARROW уже есть (иначе «двойной» символ / ABBUY)
+   string tip = (direction > 0) ? (sig + " BUY") : (sig + " SELL");
+   int fsz = SignalLabelFontSize;
+   if(fsz < 8) fsz = 8;
+   if(fsz > 12) fsz = 12;
 
    if(ShowArrows)
    {
-      double arrow_price = (direction > 0)
-         ? (bar.low - 1.6 * pad)
-         : (bar.high + 1.6 * pad);
+      double arrow_price = (direction > 0) ? (bar.low - pad) : (bar.high + pad);
       DrawArrow(base + "_A", t1, arrow_price, (direction > 0), c);
-      ObjectSetInteger(0, base + "_A", OBJPROP_WIDTH, 4);
-      ObjectSetInteger(0, base + "_A", OBJPROP_ZORDER, 93);
       ObjectSetString(0, base + "_A", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)c));
+
+      // Подпись чуть дальше стрелки, не на ней
+      double text_price = (direction > 0) ? (arrow_price - 0.7 * pad) : (arrow_price + 0.7 * pad);
+      DrawText(base + "_T", t1, text_price, tip, title_c,
+               (direction > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
    }
+   else
+   {
+      double text_price = (direction > 0) ? (bar.low - pad) : (bar.high + pad);
+      DrawText(base + "_T", t1, text_price, tip, title_c,
+               (direction > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
+   }
+   ObjectSetString(0, base + "_T", OBJPROP_FONT, "Arial");
+   ObjectSetInteger(0, base + "_T", OBJPROP_FONTSIZE, fsz);
+   ObjectSetInteger(0, base + "_T", OBJPROP_ZORDER, 91);
+   ObjectSetString(0, base + "_T", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)title_c));
 
    if(StringLen(chart_note) > 0)
    {
-      double note_price = (direction > 0) ? (bar.low - 2.8 * pad) : (bar.high + 2.8 * pad);
+      double note_price = (direction > 0) ? (bar.low - 2.4 * pad) : (bar.high + 2.4 * pad);
       DrawText(base + "_N", t1, note_price, chart_note, note_c,
                (direction > 0) ? ANCHOR_UPPER : ANCHOR_LOWER);
-      ObjectSetString(0, base + "_N", OBJPROP_FONT, "Arial Bold");
-      ObjectSetInteger(0, base + "_N", OBJPROP_FONTSIZE, 11);
-      ObjectSetInteger(0, base + "_N", OBJPROP_ZORDER, 92);
+      ObjectSetString(0, base + "_N", OBJPROP_FONT, "Arial");
+      ObjectSetInteger(0, base + "_N", OBJPROP_FONTSIZE, MathMax(8, fsz - 1));
+      ObjectSetInteger(0, base + "_N", OBJPROP_ZORDER, 91);
       ObjectSetString(0, base + "_N", OBJPROP_TOOLTIP, "ink:" + IntegerToString((int)note_c));
    }
 
@@ -3596,10 +3620,14 @@ void DeleteObjectsWithPrefix(const string pfx)
 
 void CleanupChartGraphics()
 {
-   // Текущий префикс + запасной «Acteck_» (если CommentPrefix меняли в Inputs).
+   // Текущий префикс + хвосты прошлых версий (иначе двойные ПРИЦЕЛ/стрелки).
    DeleteObjectsByPrefix(Prefix());
    if(Prefix() != "Acteck_")
       DeleteObjectsByPrefix("Acteck_");
+   if(StringFind(Prefix(), "ASmart39_") != 0)
+      DeleteObjectsByPrefix("ASmart39_");
+   if(StringFind(Prefix(), "ASmart40_") != 0)
+      DeleteObjectsByPrefix("ASmart40_");
    Comment("");
    ChartRedraw(0);
 }
@@ -4206,7 +4234,7 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
    datetime td2 = t2;
    datetime td1 = t2 - (datetime)(sec * MathMax(3, SightDashBars));
    double mid = 0.5 * (g_sightHigh + g_sightLow);
-   string label = (g_sightDirection > 0) ? "▶ ПРИЦЕЛ BUY" : "▶ ПРИЦЕЛ SELL";
+   string label = (g_sightDirection > 0) ? "ПРИЦЕЛ BUY" : "ПРИЦЕЛ SELL";
    color border = (g_sightDirection > 0) ? ColorSightBuy : ColorSightSell;
 
    const string tl  = Prefix() + "SIGHT_TL";
@@ -4249,9 +4277,9 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
 
    if(SightShowDashes)
    {
-      SightDash(d1, td1, td2, g_sightHigh, ColorSightDashHi, 3);
-      SightDash(d2, td1, td2, mid,         ColorSightDashMid, 3);
-      SightDash(d3, td1, td2, g_sightLow,  ColorSightDashLo, 3);
+      SightDash(d1, td1, td2, g_sightHigh, ColorSightDashHi, 2);
+      SightDash(d2, td1, td2, mid,         ColorSightDashMid, 2);
+      SightDash(d3, td1, td2, g_sightLow,  ColorSightDashLo, 2);
    }
    else
    {
@@ -4260,8 +4288,10 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
       if(ObjExists(d3)) ObjectDelete(0, d3);
    }
 
-   DrawText(txt, t1, g_sightHigh + 10 * PointValue(), label, border, ANCHOR_LEFT_LOWER);
-   ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 10);
+   // Подпись у правого края прицела — не в центре свечей/сигналов
+   DrawText(txt, td1, g_sightHigh + 8 * PointValue(), label, border, ANCHOR_LEFT_LOWER);
+   ObjectSetString(0, txt, OBJPROP_FONT, "Arial");
+   ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 8);
    ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
 }
 
