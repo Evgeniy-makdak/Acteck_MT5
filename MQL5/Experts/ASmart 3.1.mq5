@@ -2,7 +2,7 @@
 //|  ASmart 3.1                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: base bars + outside-bar path (corr then exit)            |
-//|  Rollback: ASmart 3.0 / 2.14                                      |
+//|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
 #property description "ASmart 3.1 — базовые свечи, внешний бар (оба экстремума), ИКИ/КЗ; UX ASmart"

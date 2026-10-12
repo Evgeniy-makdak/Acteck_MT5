@@ -133,7 +133,7 @@ def cover_first(canvas, doc):
     canvas.drawCentredString(w / 2, h * 0.36, "Базовые свечи  ·  ИКИ → КЗ  ·  38.2 / 23.6")
     canvas.drawCentredString(w / 2, h * 0.32, "Линия 30%  ·  РМ  ·  A/B/C  ·  индекс страха")
     canvas.setFont("ArialU", 8.5)
-    canvas.drawCentredString(w / 2, 22 * mm, "Актуально на 12 октября 2026  ·  откат: ASmart 2.14")
+    canvas.drawCentredString(w / 2, 22 * mm, "Актуально на 12 октября 2026 ")
     canvas.restoreState()
 
 
@@ -149,13 +149,13 @@ def build():
         "базовая и каскадная модели расширения), сохраняя UX ASmart: «30», прицел, стрелки, алерты.",
         ss["Body"]))
     story.append(Paragraph(
-        "Откат на 2.14: снять 3.1 с графика, повесить <b>ASmart 2.14</b>. Документы 2.14 не удалялись.",
+        ": снять 3.1 с графика, повесить <b>ASmart 3.1</b>. ",
         ss["Note"]))
     story.append(table(ss,
         ["Файл", "Зачем"],
         [
             ["MQL5/Experts/ASmart 3.1.mq5", "Исходник 3.1. F7 → ASmart 3.1.ex5"],
-            ["MQL5/Experts/ASmart 2.14.mq5", "Откатная версия (без изменений 3.1)"],
+            ["MQL5/Experts/ASmart 3.1.mq5", "Исходник (без изменений 3.1)"],
             ["UserGuide_ASmart_3.1_RU.txt", "Шпаргалка у графика для 3.1"],
             ["UserGuide_Snayper_Pricel_EA_RU.txt", "Шпаргалка для 2.14"],
             ["README.md", "Детектор 3.1, пороги, объекты"],
