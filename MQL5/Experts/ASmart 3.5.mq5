@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 3.4                                                       |
+//|  ASmart 3.5                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
-//|  Sniper: deferred outside bars + IKI KZ at impulse1 origin         |
+//|  Sniper: path polyline + IKI KZ thin H-lines (Pro visual parity)   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 3.4 — КЗ по ИКИ (якорь на начале импульса) + пробитие ближайшей КЗ"
-#property version   "3.40"
+#property description "ASmart 3.5 — ломаная безоткатных как Pro + КЗ тонкой горизонталью"
+#property version   "3.50"
 
-#define EA_VERSION "3.4"
+#define EA_VERSION "3.5"
 
 
 //=========================
@@ -156,7 +156,7 @@ input int                  MaxPositions         = 1;
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart34";
+input string               CommentPrefix        = "ASmart35";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -208,7 +208,7 @@ input color                ColorLondon          = clrDodgerBlue;
 input color                ColorNY              = clrTomato;
 
 input group "=== Sniper: Liquidity zones ==="
-input bool                 ShowLiquidityZones   = true;  // Спрос / Предложение (как на эталонном скрине)
+input bool                 ShowLiquidityZones   = false; // Спрос / Предложение (выкл. — не путать с КЗ)
 input int                  LiqPivotDepth        = 3;   // глубина пивотов зон ликвидности (не зависит от SpeedPreset)
 input double               LiqZoneATR_Mult      = 0.35;   // zone height = mult * ATR
 input int                  MaxLiquidityZones    = 3;
@@ -273,10 +273,10 @@ input bool                 ShowZoneFill         = false;  // заливка зо
 input bool                 ShowFib30            = true;   // вспомог. линия «30» (UX ASmart)
 input bool                 ShowModelFib382      = false;  // базовая модель: линия 38.2% (выкл. — не нужна для входа)
 input bool                 ShowModelFib236      = false;  // каскад: линия 23.6% (выкл. по умолч.)
-input bool                 ShowContinuedMoveZ   = true;   // Z-контур хода по базовым свечам
+input bool                 ShowContinuedMoveZ   = true;   // ломаная безоткатных по базовым (как Pro)
 input bool                 ShowTipZeroLabel     = true;   // подпись «-0.00» у кончика хода (как Pro)
-input bool                 ShowBasePathDebug    = false;  // ОТЛАДКА: ломаная пути + ✓/✗ как на уроке
-input int                  BasePathMaxBars      = 80;     // глубина отладки пути (баров)
+input bool                 ShowBasePathDebug    = false;  // ОТЛАДКА: метки ✓/✗/◇ на узлах пути
+input int                  BasePathMaxBars      = 120;    // глубина ломаной пути (баров)
 input color                ColorBasePath        = clrDodgerBlue; // ломаная пути базовых
 input color                ColorValidCorr       = clrLime;       // действительная коррекция
 input color                ColorInvalidCorr     = clrTomato;     // недействительная / внутренний бар
@@ -286,7 +286,8 @@ input color                ColorFib30Old        = clrOrange;     // «30» пр�
 input color                ColorModelFib382     = clrOrangeRed;  // линия/зона 38.2
 input color                ColorModelFib236     = clrMediumOrchid; // линия/зона 23.6
 input color                ColorContinuedMove   = clrDodgerBlue; // синий пунктир Z (как Pro)
-input color                ColorKZ              = clrPowderBlue; // коррекционная зона ИКИ
+input color                ColorKZ              = clrDodgerBlue; // КЗ сопротивление (тонкая линия)
+input color                ColorKZ_Support      = clrLime;       // КЗ поддержка (тонкая линия, как Pro)
 input int                  WidthContinuedMove   = 2;      // толщина пунктира Z (1..4)
 input ENUM_SPEED_PRESET    SpeedPreset          = SPEED_CALM; // скальп / спокойный / свинги — для ЛЮБОЙ пары
 input int                  IndicatorSpeed       = 8;      // глубина, если SpeedPreset=CUSTOM (2..60)
@@ -593,6 +594,7 @@ int    ExpandBaseEvents(const SBaseBar &bases[], const MqlRates &rates[], SBaseE
 void   DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag);
 void   DetectExpansionModels_Sniper(const MqlRates &rates[], const string tf_tag);
 void   DrawModelFibOverlays(const MqlRates &rates[]);
+void   DrawSniperPathLegs(const MqlRates &rates[]);
 void   DrawBasePathDebug(const MqlRates &rates[]);
 void   ResetModelZone(SModelZone &z);
 bool   BarHasReversalMoment(const datetime t, const int direction);
@@ -4804,6 +4806,46 @@ void Fib30ArchiveCurrent()
    ObjectSetString(0, txt, OBJPROP_TOOLTIP, day);
 }
 
+
+// Ломаная безоткатных движений по событиям базовых — как синий пунктир Sniper Pro.
+void DrawSniperPathLegs(const MqlRates &rates[])
+{
+   const string pfx = Prefix() + "PATH_";
+   DeleteObjectsWithPrefix(pfx);
+   if(!ShowContinuedMoveZ)
+      return;
+
+   const int nr = ArraySize(rates);
+   if(nr < 20)
+      return;
+
+   const int look = MathMin(nr - 1, MathMax(30, BasePathMaxBars));
+   SBaseBar bases[];
+   const int nb = BuildBaseBars(rates, look, bases);
+   if(nb < 2)
+      return;
+
+   SBaseEvent ev[];
+   const int ne = ExpandBaseEvents(bases, rates, ev);
+   if(ne < 2)
+      return;
+
+   int zw = WidthContinuedMove;
+   if(zw < 1) zw = 1;
+   if(zw > 4) zw = 4;
+   const ENUM_LINE_STYLE zs = (zw > 1) ? STYLE_DASH : STYLE_DOT;
+
+   for(int i = 1; i < ne; i++)
+   {
+      const string nm = pfx + "L" + IntegerToString(i);
+      DrawTrendSegment(nm, ev[i - 1].time, ev[i - 1].extreme, ev[i].time, ev[i].extreme,
+                       ColorContinuedMove, zs, zw);
+      ObjectSetInteger(0, nm, OBJPROP_BACK, false);
+      ObjectSetInteger(0, nm, OBJPROP_ZORDER, 40);
+      ObjectSetString(0, nm, OBJPROP_TOOLTIP, "Безоткатное / путь базовых свечей (Снайпер)");
+   }
+}
+
 // Отладка пути: ломаная по событиям базовых + метки ✓/✗/внешний бар (как слайды Снайпер).
 void DrawBasePathDebug(const MqlRates &rates[])
 {
@@ -4827,19 +4869,7 @@ void DrawBasePathDebug(const MqlRates &rates[])
    if(ne < 2)
       return;
 
-   // 1) Ломаная по узлам событий (хай/лой пути)
-   for(int i = 1; i < ne; i++)
-   {
-      const string nm = pfx + "L" + IntegerToString(i);
-      DrawTrendSegment(nm, ev[i - 1].time, ev[i - 1].extreme, ev[i].time, ev[i].extreme,
-                       ColorBasePath, STYLE_SOLID, 2);
-      ObjectSetInteger(0, nm, OBJPROP_BACK, false);
-      ObjectSetInteger(0, nm, OBJPROP_ZORDER, 50);
-      ObjectSetString(0, nm, OBJPROP_TOOLTIP,
-                   (ev[i].dir > 0) ? "Путь: обновление максимума базовой" : "Путь: обновление минимума базовой");
-   }
-
-   // 2) Маркеры на событиях: коррекция / продолжение / внешний (два события на одном base_i)
+   // Маркеры на событиях (ломаная уже в DrawSniperPathLegs): коррекция / продолжение / внешний (два события на одном base_i)
    int prev_dir = 0;
    for(int i = 0; i < ne; i++)
    {
@@ -4931,6 +4961,7 @@ void DrawFib30Line(const MqlRates &rates[])
    {
       DeleteObjectsWithPrefix(live);
       DeleteObjectsWithPrefix(pfx + "H_");
+      DeleteObjectsWithPrefix(Prefix() + "PATH_");
       g_fib30_have = false;
       g_fib30_retraced = false;
       DrawModelFibOverlays(rates);
@@ -4957,6 +4988,7 @@ void DrawFib30Line(const MqlRates &rates[])
    {
       DeleteObjectsWithPrefix(live);
       g_fib30_retraced = false;
+      DrawSniperPathLegs(rates); // путь по истории даже без актуального Z
       DrawModelFibOverlays(rates);
       return;
    }
@@ -4992,18 +5024,21 @@ void DrawFib30Line(const MqlRates &rates[])
    if((long)(h1b - h1a) < (long)sec * 6)
       h1b = (datetime)((long)h1a + (long)sec * 8);
 
+   // Ломаная безоткатных — как Pro (не одна диагональ последнего импульса)
+   DrawSniperPathLegs(rates);
+
    if(ShowContinuedMoveZ)
    {
       int zw = WidthContinuedMove;
       if(zw < 1) zw = 1;
       if(zw > 4) zw = 4;
       ENUM_LINE_STYLE zs = (zw > 1) ? STYLE_DASH : STYLE_DOT;
+      // короткие риски 100%/0% у актуального импульса (для «30» / входа)
       DrawHLineSegment(live + "Z0", h0a, h0b, price_100, ColorContinuedMove, zs, zw, "");
       DrawHLineSegment(live + "Z1", h1a, h1b, price_0, ColorContinuedMove, zs, zw, "");
-      DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, ColorContinuedMove, zs, zw);
+      if(ObjExists(live + "ZD")) ObjectDelete(0, live + "ZD"); // старая одна диагональ — убрана
       ObjectSetString(0, live + "Z0", OBJPROP_TOOLTIP, "Импульс (базовые свечи): начало 100%");
       ObjectSetString(0, live + "Z1", OBJPROP_TOOLTIP, "Импульс (базовые свечи): кончик 0%");
-      ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP, "Безоткатное движение по базовым свечам Снайпер");
       if(ShowTipZeroLabel)
       {
          DrawText(live + "TIP", h1b, price_0, "-0.00", ColorContinuedMove, ANCHOR_LEFT_UPPER);
@@ -5110,6 +5145,41 @@ void DrawStructureZone(const SStructureZone &z)
                   (StringLen(z.label) > 0 ? z.label : "ГУД"), gc, ANCHOR_LEFT_LOWER);
          ObjectSetInteger(0, base + "_LBL", OBJPROP_FONTSIZE, 7);
       }
+      return;
+   }
+
+   // КЗ / ПД как у Pro: короткая тонкая горизонталь на уровне (не толстый прямоугольник)
+   if(z.kind == SK_KZ || z.kind == SK_PD)
+   {
+      // ИКИ-КЗ: уровень = начало импульса1; ПД: середина полосы у tip
+      const double lvl = (z.kind == SK_KZ && z.imp_start != 0.0)
+                         ? z.imp_start
+                         : (0.5 * (z.high + z.low));
+      color kc = (z.direction > 0) ? ColorKZ_Support : ColorKZ;
+      kc = InkColor(kc, ink);
+      const int sec = PeriodSeconds(Timeframe);
+      datetime t_a = z.t1;
+      datetime t_b = z.t2;
+      if(t_b < t_a) { datetime sw = t_a; t_a = t_b; t_b = sw; }
+      // короткая риска вправо от узла (как на эталоне Sniper)
+      if((long)(t_b - t_a) > (long)sec * 80)
+         t_b = (datetime)((long)t_a + (long)sec * 48);
+      DrawHLineSegment(base + "_OL", t_a, t_b, lvl, kc, STYLE_SOLID, 2, z.label);
+      ObjectSetInteger(0, base + "_OL", OBJPROP_ZORDER, 25);
+      if(ObjExists(base + "_BOX")) ObjectDelete(0, base + "_BOX");
+      if(ink >= 0.45 && (ShowStructureLabels || z.kind == SK_KZ))
+      {
+         string lbl = (z.kind == SK_KZ) ? (z.direction > 0 ? "КЗ↑" : "КЗ↓") : z.label;
+         if(!ShowStructureLabels && z.kind != SK_KZ)
+            lbl = "";
+         if(StringLen(lbl) > 0)
+         {
+            DrawText(base + "_LBL", t_b, lvl, lbl, kc, ANCHOR_LEFT);
+            ObjectSetInteger(0, base + "_LBL", OBJPROP_FONTSIZE, 7);
+         }
+      }
+      else if(ObjExists(base + "_LBL"))
+         ObjectDelete(0, base + "_LBL");
       return;
    }
 
