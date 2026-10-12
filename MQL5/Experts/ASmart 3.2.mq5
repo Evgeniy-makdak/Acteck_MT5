@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 3.1                                                       |
+//|  ASmart 3.2                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: base bars + outside-bar path (corr then exit)            |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 3.1 — базовые свечи, внешний бар (оба экстремума), ИКИ/КЗ; UX ASmart"
-#property version   "3.10"
+#property description "ASmart 3.2 — базовые/внешний бар; ShowBasePathDebug; ИКИ/КЗ; UX ASmart"
+#property version   "3.20"
 
-#define EA_VERSION "3.1"
+#define EA_VERSION "3.2"
 
 
 //=========================
@@ -156,7 +156,7 @@ input int                  MaxPositions         = 1;
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart31";
+input string               CommentPrefix        = "ASmart32";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -275,6 +275,12 @@ input bool                 ShowModelFib382      = false;  // базовая мо
 input bool                 ShowModelFib236      = false;  // каскад: линия 23.6% (выкл. по умолч.)
 input bool                 ShowContinuedMoveZ   = true;   // Z-контур хода по базовым свечам
 input bool                 ShowTipZeroLabel     = true;   // подпись «-0.00» у кончика хода (как Pro)
+input bool                 ShowBasePathDebug    = false;  // ОТЛАДКА: ломаная пути + ✓/✗ как на уроке
+input int                  BasePathMaxBars      = 80;     // глубина отладки пути (баров)
+input color                ColorBasePath        = clrDodgerBlue; // ломаная пути базовых
+input color                ColorValidCorr       = clrLime;       // действительная коррекция
+input color                ColorInvalidCorr     = clrTomato;     // недействительная / внутренний бар
+input color                ColorOutsideBar      = clrGold;       // внешний бар (оба экстремума)
 input color                ColorFib30           = clrDodgerBlue; // сплошная «30» (актуальная, справа)
 input color                ColorFib30Old        = clrOrange;     // «30» прошлого хода (память до след. дня)
 input color                ColorModelFib382     = clrOrangeRed;  // линия/зона 38.2
@@ -587,6 +593,7 @@ int    ExpandBaseEvents(const SBaseBar &bases[], const MqlRates &rates[], SBaseE
 void   DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag);
 void   DetectExpansionModels_Sniper(const MqlRates &rates[], const string tf_tag);
 void   DrawModelFibOverlays(const MqlRates &rates[]);
+void   DrawBasePathDebug(const MqlRates &rates[]);
 void   ResetModelZone(SModelZone &z);
 bool   BarHasReversalMoment(const datetime t, const int direction);
 bool   PassPriceAction(const int direction, const MqlRates &bar, const MqlRates &prev);
@@ -4775,6 +4782,124 @@ void Fib30ArchiveCurrent()
    ObjectSetString(0, txt, OBJPROP_TOOLTIP, day);
 }
 
+// Отладка пути: ломаная по событиям базовых + метки ✓/✗/внешний бар (как слайды Снайпер).
+void DrawBasePathDebug(const MqlRates &rates[])
+{
+   const string pfx = Prefix() + "BPATH_";
+   DeleteObjectsWithPrefix(pfx);
+   if(!ShowBasePathDebug)
+      return;
+
+   const int nr = ArraySize(rates);
+   if(nr < 20)
+      return;
+
+   const int look = MathMin(nr - 1, MathMax(20, BasePathMaxBars));
+   SBaseBar bases[];
+   const int nb = BuildBaseBars(rates, look, bases);
+   if(nb < 2)
+      return;
+
+   SBaseEvent ev[];
+   const int ne = ExpandBaseEvents(bases, rates, ev);
+   if(ne < 2)
+      return;
+
+   // 1) Ломаная по узлам событий (хай/лой пути)
+   for(int i = 1; i < ne; i++)
+   {
+      const string nm = pfx + "L" + IntegerToString(i);
+      DrawTrendSegment(nm, ev[i - 1].time, ev[i - 1].extreme, ev[i].time, ev[i].extreme,
+                       ColorBasePath, STYLE_SOLID, 2);
+      ObjectSetInteger(0, nm, OBJPROP_BACK, false);
+      ObjectSetInteger(0, nm, OBJPROP_ZORDER, 50);
+      ObjectSetString(0, nm, OBJPROP_TOOLTIP,
+                   (ev[i].dir > 0) ? "Путь: обновление максимума базовой" : "Путь: обновление минимума базовой");
+   }
+
+   // 2) Маркеры на событиях: коррекция / продолжение / внешний (два события на одном base_i)
+   int prev_dir = 0;
+   for(int i = 0; i < ne; i++)
+   {
+      const bool outside_pair = (i > 0 && ev[i].base_i == ev[i - 1].base_i);
+      const bool corr = (prev_dir != 0 && ev[i].dir != prev_dir);
+      string mark = "•";
+      color mc = ColorBasePath;
+      string tip = "Узел пути";
+      if(outside_pair)
+      {
+         mark = "◆";
+         mc = ColorOutsideBar;
+         tip = "Внешний бар: 2-й узел (выход) — оба экстремума учтены";
+      }
+      else if(corr)
+      {
+         mark = "✓";
+         mc = ColorValidCorr;
+         tip = "Действительная коррекция: обновлён экстремум базовой против импульса";
+      }
+      // первая половина внешнего бара (i и i+1 same base)
+      if(i + 1 < ne && ev[i].base_i == ev[i + 1].base_i)
+      {
+         mark = "◇";
+         mc = ColorOutsideBar;
+         tip = "Внешний бар: 1-й узел (коррекция внутри бара)";
+      }
+
+      const string tn = pfx + "M" + IntegerToString(i);
+      DrawText(tn, ev[i].time, ev[i].extreme, mark, mc,
+               (ev[i].dir > 0) ? ANCHOR_LOWER : ANCHOR_UPPER);
+      ObjectSetInteger(0, tn, OBJPROP_FONTSIZE, 10);
+      ObjectSetString(0, tn, OBJPROP_TOOLTIP, tip);
+      prev_dir = ev[i].dir;
+   }
+
+   // 3) Внутренние / недействительные коррекции — свечи, не ставшие базовыми
+   bool is_base[];
+   ArrayResize(is_base, nr);
+   ArrayInitialize(is_base, false);
+   for(int b = 0; b < nb; b++)
+   {
+      const int ix = bases[b].idx;
+      if(ix >= 0 && ix < nr)
+         is_base[ix] = true;
+   }
+
+   int last_base_i = -1;
+   for(int i = look; i >= 1; i--)
+   {
+      if(is_base[i])
+      {
+         last_base_i = i;
+         continue;
+      }
+      if(last_base_i < 0)
+         continue;
+      // внутренний относительно последней базовой левее по времени = с большим idx... 
+      // bases строятся oldest→new; last_base среди уже пройденных при идти от old к new:
+      // здесь идём от old (look) к new (1). last_base_i — предыдущая базовая.
+      const double bh = rates[last_base_i].high;
+      const double bl = rates[last_base_i].low;
+      if(rates[i].high <= bh && rates[i].low >= bl)
+      {
+         const string xn = pfx + "X" + IntegerToString(i);
+         const double mid = 0.5 * (rates[i].high + rates[i].low);
+         DrawText(xn, rates[i].time, mid, "✗", ColorInvalidCorr, ANCHOR_CENTER);
+         ObjectSetInteger(0, xn, OBJPROP_FONTSIZE, 9);
+         ObjectSetString(0, xn, OBJPROP_TOOLTIP,
+                      "Недействительная коррекция / внутренний бар: экстремум базовой не обновлён");
+      }
+   }
+
+   // легенда справа у текущей цены
+   const datetime tleg = rates[0].time;
+   double pleg = rates[0].close;
+   DrawText(pfx + "LEG1", tleg, pleg, "путь✓корр ✗внутр ◆внешн", ColorBasePath, ANCHOR_LEFT_UPPER);
+   ObjectSetInteger(0, pfx + "LEG1", OBJPROP_FONTSIZE, 7);
+   ObjectSetString(0, pfx + "LEG1", OBJPROP_TOOLTIP,
+                  "Отладка ShowBasePathDebug: ломаная = события базовых свечей");
+}
+
 void DrawFib30Line(const MqlRates &rates[])
 {
    // Z по базовым свечам + вспомог. «30» + подпись -0.00. Модели 38.2/23.6 — DrawModelFibOverlays.
@@ -6258,6 +6383,7 @@ void RefreshSniperContext(const MqlRates &rates[])
    UpdateSniperStructures(rates); // ЗУ / ПД / каскад / РМ (на закрытии бара)
    UpdateSight(rates);            // сторона прицела ДО Fib30
    DrawFib30Line(rates);          // актуальная «30» справа у новых свечей
+   DrawBasePathDebug(rates);      // опционально: ломаная пути / ✓✗ как на уроке
    ApplyProbabilityHUD(true);
 }
 
@@ -6287,6 +6413,7 @@ void RefreshContextLive()
       UpdateSight(rates);
 
    DrawFib30Line(rates); // подтянуть «30» к актуальному свингу
+   DrawBasePathDebug(rates);
 
    ApplyProbabilityHUD(false);
 }

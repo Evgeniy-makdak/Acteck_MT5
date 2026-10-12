@@ -1,6 +1,6 @@
-ASmart 3.1 — пресеты (Acteck_v3.1_*.set)
+ASmart 3.2 — пресеты (Acteck_v3.2_*.set)
 
-  Acteck_v3.1_<PAIR>_<mode>.set
+  Acteck_v3.2_<PAIR>_<mode>.set
   PAIR: EURUSD | GBPUSD | USDJPY | USDCHF | XAUUSD | BTCUSD
   mode: scalp | calm | swing_H1
 
