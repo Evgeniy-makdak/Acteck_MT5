@@ -271,8 +271,8 @@ input bool                 ShowReversalMoments  = true;   // РМ: рамка н
 input bool                 ShowGUDLevels        = true;   // ГУД: глобальный уровень дисбаланса (М/W)
 input bool                 ShowZoneFill         = false;  // заливка зон ВЫКЛ — только контур
 input bool                 ShowFib30            = true;   // вспомог. линия «30» (UX ASmart)
-input bool                 ShowModelFib382      = true;   // базовая модель: зона 38.2% последнего импульса
-input bool                 ShowModelFib236      = true;   // каскад: зона 23.6% первого импульса каскада
+input bool                 ShowModelFib382      = false;  // базовая модель: линия 38.2% (выкл. — не нужна для входа)
+input bool                 ShowModelFib236      = false;  // каскад: линия 23.6% (выкл. по умолч.)
 input bool                 ShowContinuedMoveZ   = true;   // Z-контур хода по базовым свечам
 input bool                 ShowTipZeroLabel     = true;   // подпись «-0.00» у кончика хода (как Pro)
 input color                ColorFib30           = clrDodgerBlue; // сплошная «30» (актуальная, справа)
@@ -5283,42 +5283,7 @@ void DetectExpansionModels_Sniper(const MqlRates &rates[], const string tf_tag)
       basic_ok = (swept_h && swept_l);
    }
 
-   // Разворотная зона базовой модели: 38.2% от последнего импульса
-   if(ShowModelFib382 || ShowDecisionZones)
-   {
-      const double pct = MathMax(10.0, BasicRevZonePct) / 100.0;
-      const double price = mv.tip + pct * (mv.origin - mv.tip);
-      g_modelBasic.active = true;
-      g_modelBasic.kind = 1;
-      g_modelBasic.dir = -mv.dir; // отбой от зоны против последнего импульса к ближайшей КЗ
-      // по методичке: вход в сторону последней пробитой КЗ = направление последнего импульса после расширения
-      g_modelBasic.dir = mv.dir;
-      g_modelBasic.price = price;
-      g_modelBasic.origin = mv.origin;
-      g_modelBasic.tip = mv.tip;
-      g_modelBasic.t1 = mv.t_tip;
-      g_modelBasic.t2 = now_t + (datetime)(sec * 36);
-      if(mv.dir > 0)
-      {
-         g_modelBasic.z_hi = price + zh * 0.25;
-         g_modelBasic.z_lo = price - zh * 0.75;
-      }
-      else
-      {
-         g_modelBasic.z_hi = price + zh * 0.75;
-         g_modelBasic.z_lo = price - zh * 0.25;
-      }
-      g_modelBasic.label = StringFormat("Базовая 38.2 %s", (mv.dir > 0 ? "BUY" : "SELL"));
-
-      if(ShowDecisionZones && (basic_ok || mv.retraced_30))
-      {
-         PushStructureZoneEx(SK_ZU, PAT_EXP_AFTER_PD, mv.dir, g_modelBasic.t1, g_modelBasic.t2,
-                             g_modelBasic.z_hi, g_modelBasic.z_lo, mv.range, BasicRevZonePct,
-                             g_modelBasic.label, true, tf_tag, mv.origin, mv.tip);
-      }
-   }
-
-   // Каскад: продолжение — пробой КЗ в сторону импульса + зона 23.6 от текущего импульса
+   // Каскад: продолжение — пробой КЗ в сторону импульса
    bool cascade_ok = false;
    if(have_hi || have_lo)
    {
@@ -5340,11 +5305,49 @@ void DetectExpansionModels_Sniper(const MqlRates &rates[], const string tf_tag)
       }
    }
 
-   if((ShowModelFib236 || ShowDecisionZones) && (cascade_ok || basic_ok))
+   // Fib-сетка Снайпер: 0% = tip (конец импульса), 100% = origin (начало).
+   // Уровень pct = tip + pct*(origin−tip): при росте tip=хай → линия ниже хая;
+   // при падении tip=лой → линия выше лоя. Это не «от произвольного max/min».
+   // Рисуем/активируем ТОЛЬКО при подтверждённой модели (не на каждом ходе).
+   if(basic_ok && (ShowModelFib382 || ShowDecisionZones))
+   {
+      const double pct = MathMax(10.0, BasicRevZonePct) / 100.0;
+      const double price = mv.tip + pct * (mv.origin - mv.tip);
+      g_modelBasic.active = ShowModelFib382;
+      g_modelBasic.kind = 1;
+      g_modelBasic.dir = mv.dir;
+      g_modelBasic.price = price;
+      g_modelBasic.origin = mv.origin;
+      g_modelBasic.tip = mv.tip;
+      g_modelBasic.t1 = mv.t_tip;
+      g_modelBasic.t2 = now_t + (datetime)(sec * 36);
+      if(mv.dir > 0)
+      {
+         g_modelBasic.z_hi = price + zh * 0.25;
+         g_modelBasic.z_lo = price - zh * 0.75;
+      }
+      else
+      {
+         g_modelBasic.z_hi = price + zh * 0.75;
+         g_modelBasic.z_lo = price - zh * 0.25;
+      }
+      g_modelBasic.label = ShowModelFib382
+         ? StringFormat("Базовая 38.2 %s", (mv.dir > 0 ? "BUY" : "SELL"))
+         : StringFormat("ЗУ базовая %s", (mv.dir > 0 ? "BUY" : "SELL"));
+
+      if(ShowDecisionZones)
+      {
+         PushStructureZoneEx(SK_ZU, PAT_EXP_AFTER_PD, mv.dir, g_modelBasic.t1, g_modelBasic.t2,
+                             g_modelBasic.z_hi, g_modelBasic.z_lo, mv.range, BasicRevZonePct,
+                             g_modelBasic.label, true, tf_tag, mv.origin, mv.tip);
+      }
+   }
+
+   if(cascade_ok && (ShowModelFib236 || ShowDecisionZones))
    {
       const double pct = MathMax(8.0, CascadeRevZonePct) / 100.0;
       const double price = mv.tip + pct * (mv.origin - mv.tip);
-      g_modelCascade.active = true;
+      g_modelCascade.active = ShowModelFib236;
       g_modelCascade.kind = 2;
       g_modelCascade.dir = mv.dir;
       g_modelCascade.price = price;
@@ -5362,9 +5365,11 @@ void DetectExpansionModels_Sniper(const MqlRates &rates[], const string tf_tag)
          g_modelCascade.z_hi = price + zh * 0.6;
          g_modelCascade.z_lo = price - zh * 0.2;
       }
-      g_modelCascade.label = StringFormat("Каскад 23.6 %s", (mv.dir > 0 ? "BUY" : "SELL"));
+      g_modelCascade.label = ShowModelFib236
+         ? StringFormat("Каскад 23.6 %s", (mv.dir > 0 ? "BUY" : "SELL"))
+         : StringFormat("ЗУ каскад %s", (mv.dir > 0 ? "BUY" : "SELL"));
 
-      if(ShowDecisionZones && cascade_ok)
+      if(ShowDecisionZones)
       {
          PushStructureZoneEx(SK_CASCADE, PAT_EXP_CASCADE, mv.dir, g_modelCascade.t1, g_modelCascade.t2,
                              g_modelCascade.z_hi, g_modelCascade.z_lo, mv.range, CascadeRevZonePct,
@@ -5388,8 +5393,10 @@ void DrawModelFibOverlays(const MqlRates &rates[])
       DrawHLineSegment(pfx + "382", t1, t2, g_modelBasic.price, ColorModelFib382, STYLE_DASH, 1, "");
       DrawText(pfx + "382T", t2, g_modelBasic.price, "38.2", ColorModelFib382, ANCHOR_LEFT_LOWER);
       ObjectSetInteger(0, pfx + "382T", OBJPROP_FONTSIZE, 8);
-      ObjectSetString(0, pfx + "382", OBJPROP_TOOLTIP, "Базовая модель: разворотная зона 38.2% последнего импульса");
-      ObjectSetString(0, pfx + "382T", OBJPROP_TOOLTIP, "Базовая модель расширения — зона входа 38.2%");
+      ObjectSetString(0, pfx + "382", OBJPROP_TOOLTIP,
+                     "38.2%: сетка 0%=tip импульса, 100%=origin; только при базовой модели");
+      ObjectSetString(0, pfx + "382T", OBJPROP_TOOLTIP,
+                     "Разворотная зона базовой модели (не обязательна для входа ASmart)");
    }
 
    if(ShowModelFib236 && g_modelCascade.active)
