@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 3.6                                                       |
+//|  ASmart 3.7                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
-//|  Sniper: single Z diagonal + IKI KZ thin H-lines (Pro parity)      |
+//|  Sniper: IKI Z polyline (org→tip1→corr→tip) + thin KZ             |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 3.6 — Z одна диагональ как Pro; КЗ тонкой горизонталью"
-#property version   "3.60"
+#property description "ASmart 3.7 — Z как ИКИ-ломаная Pro (начало→tip1→корр→tip)"
+#property version   "3.70"
 
-#define EA_VERSION "3.6"
+#define EA_VERSION "3.7"
 
 
 //=========================
@@ -156,7 +156,7 @@ input int                  MaxPositions         = 1;
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart36";
+input string               CommentPrefix        = "ASmart37";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -273,7 +273,7 @@ input bool                 ShowZoneFill         = false;  // заливка зо
 input bool                 ShowFib30            = true;   // вспомог. линия «30» (UX ASmart)
 input bool                 ShowModelFib382      = false;  // базовая модель: линия 38.2% (выкл. — не нужна для входа)
 input bool                 ShowModelFib236      = false;  // каскад: линия 23.6% (выкл. по умолч.)
-input bool                 ShowContinuedMoveZ   = true;   // Z: одна диагональ безоткатного (как Pro)
+input bool                 ShowContinuedMoveZ   = true;   // Z: ИКИ-ломаная как Pro (4 точки)
 input bool                 ShowTipZeroLabel     = true;   // подпись «-0.00» у кончика хода (как Pro)
 input bool                 ShowBasePathDebug    = false;  // ОТЛАДКА: ломаная узлов + ✓/✗/◇
 input int                  BasePathMaxBars      = 80;     // глубина отладки пути (баров)
@@ -537,7 +537,7 @@ struct SContinuedMove
    bool     retraced_30; // откат ≥ PD_MinCorrectionPct — UX «30» / поиск входа
    bool     cancelled_50;
    int      dir;         // +1 вверх; -1 вниз
-   double   origin;      // 100% — начало импульса
+   double   origin;      // 100% — база продолжения (= экстремум коррекции ИКИ)
    double   tip;         // 0%  — кончик импульса
    datetime t_origin;
    datetime t_tip;
@@ -545,6 +545,14 @@ struct SContinuedMove
    double   range;
    double   retrace_pct;
    int      base_count;  // число базовых свечей в импульсе
+   // Z как у Pro: ИКИ-ломаная org1 → tip1 → corr → tip
+   bool     has_iki_z;
+   double   z_org1;
+   double   z_tip1;
+   double   z_corr;
+   datetime z_t_org1;
+   datetime z_t_tip1;
+   datetime z_t_corr;
 };
 
 struct SBaseBar
@@ -1442,6 +1450,13 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    m.range = 0.0;
    m.retrace_pct = 0.0;
    m.base_count = 0;
+   m.has_iki_z = false;
+   m.z_org1 = 0.0;
+   m.z_tip1 = 0.0;
+   m.z_corr = 0.0;
+   m.z_t_org1 = 0;
+   m.z_t_tip1 = 0;
+   m.z_t_corr = 0;
    g_lastImpulseRange = 0.0;
    g_lastImpulseDir   = 0;
 
@@ -1453,232 +1468,159 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    const double retrace_on = MathMax(complete_need, PD_MinCorrectionPct / 100.0);
    const double cancel_at = MathMax(retrace_on + 0.05, PD_CancelRetracePct / 100.0);
    const int look = MathMin(nr, MathMax(50, StructureLookbackBars));
+   double atr = 0.0;
+   GetBufferValue(g_hATR_Filter, 1, atr);
+   const double eps = MathMax(PointValue() * 2.0, (atr > 0.0 ? 0.05 * atr : PointValue() * 5.0));
 
    SBaseBar bases[];
    const int nb = BuildBaseBars(rates, look - 1, bases);
-   if(nb < 3)
+   if(nb < 6)
       return false;
 
    SBaseEvent ev[];
    const int ne = ExpandBaseEvents(bases, rates, ev);
-   if(ne < 2)
+   if(ne < 6)
       return false;
 
-   int best_dir = 0, best_a = -1, best_b = -1, best_count = 0;
-   double best_range = 0.0;
+   // Ищем действительные ИКИ и продолжение после коррекции (как Z у Pro):
+   // org1 → tip1 → corr → tip_продолжения
+   int best_i2_end = -1;
+   double best_score = 0.0;
+   int best_dir = 0;
+   double best_org1 = 0, best_tip1 = 0, best_corr = 0, best_tip = 0;
+   datetime best_t1 = 0, best_t2 = 0, best_t3 = 0, best_t4 = 0;
+   int best_i_tip = 0;
+   int best_nbase = 0;
 
-   int cur_dir = 0, cur_a = -1, cur_b = -1, cur_count = 0;
-
-   for(int i = 0; i < ne; i++)
+   for(int i = 5; i < ne; i++)
    {
-      const int d = ev[i].dir;
-      if(d == 0) continue;
+      const int d2 = ev[i].dir;
+      if(d2 == 0) continue;
+      if(i + 1 < ne && ev[i + 1].dir == d2) continue; // ждём конец сегмента импульса2
 
-      if(cur_dir == 0 || d != cur_dir)
+      int i2_end = i, i2_start = i;
+      for(int k = i - 1; k >= 0; k--)
       {
-         if(cur_dir != 0 && cur_a >= 0)
+         if(ev[k].dir == d2) i2_start = k;
+         else break;
+      }
+      if(i2_start < 1) continue;
+
+      int i_corr = i2_start - 1;
+      if(i_corr < 0 || ev[i_corr].dir != -d2) continue;
+      int corr_end = i_corr, corr_start = i_corr;
+      for(int k = i_corr - 1; k >= 0; k--)
+      {
+         if(ev[k].dir == -d2) corr_start = k;
+         else break;
+      }
+
+      int i1_end = corr_start - 1;
+      if(i1_end < 0 || ev[i1_end].dir != d2) continue;
+      int i1_start = i1_end;
+      for(int k = i1_end - 1; k >= 0; k--)
+      {
+         if(ev[k].dir == d2) i1_start = k;
+         else break;
+      }
+
+      double org1, tip1, corr_ext, tip2;
+      datetime t_org1, t_tip1, t_corr, t_tip2;
+
+      if(d2 > 0)
+      {
+         org1 = bases[ev[i1_start].base_i].low; t_org1 = bases[ev[i1_start].base_i].time;
+         tip1 = ev[i1_start].extreme; t_tip1 = ev[i1_start].time;
+         for(int k = i1_start; k <= i1_end; k++)
          {
-            double org = (cur_dir > 0) ? ev[cur_a].extreme : ev[cur_a].extreme;
-            double tip = ev[cur_a].extreme;
-            // origin = opposite extreme at segment start base; tip = farthest in dir
-            const int b0 = ev[cur_a].base_i;
-            const int b1 = ev[cur_b].base_i;
-            if(cur_dir > 0)
-            {
-               org = bases[b0].low;
-               tip = bases[b0].high;
-               for(int j = cur_a; j <= cur_b; j++)
-               {
-                  const int bi = ev[j].base_i;
-                  if(bases[bi].low < org) org = bases[bi].low;
-                  if(ev[j].extreme > tip) tip = ev[j].extreme;
-                  if(bases[bi].high > tip) tip = bases[bi].high;
-               }
-            }
-            else
-            {
-               org = bases[b0].high;
-               tip = bases[b0].low;
-               for(int j = cur_a; j <= cur_b; j++)
-               {
-                  const int bi = ev[j].base_i;
-                  if(bases[bi].high > org) org = bases[bi].high;
-                  if(ev[j].extreme < tip) tip = ev[j].extreme;
-                  if(bases[bi].low < tip) tip = bases[bi].low;
-               }
-            }
-            // развязка внешнего / смена направления: origin = экстремум предыдущего узла
-            if(cur_a > 0 && ev[cur_a - 1].dir == -cur_dir)
-            {
-               const double pe = ev[cur_a - 1].extreme;
-               if(cur_dir < 0 && pe > org) org = pe;
-               if(cur_dir > 0 && pe < org) org = pe;
-            }
-            const double sz = MathAbs(org - tip);
-            int nbase = 0;
-            int last_bi = -1;
-            for(int j = cur_a; j <= cur_b; j++)
-            {
-               if(ev[j].base_i != last_bi) { nbase++; last_bi = ev[j].base_i; }
-            }
-            const int span = MathAbs(ev[cur_a].rate_idx - ev[cur_b].rate_idx) + 1;
-            if(ImpulseQualified(sz, MathMax(nbase, MathMin(span, nbase + 2))))
-            {
-               // Pro: Z = безоткатный импульс; мелкий откат противоположного направления
-               // не перехватывает диагональ, пока < cancel (обычно 50%) от текущего Z.
-               bool take = false;
-               if(best_dir == 0)
-                  take = true;
-               else if(cur_dir == best_dir)
-               {
-                  if(ev[cur_b].rate_idx <= ev[best_b].rate_idx)
-                     take = true;
-               }
-               else
-               {
-                  const bool newer = (ev[cur_b].rate_idx <= ev[best_b].rate_idx);
-                  if(newer && (sz + 1.0e-12 >= best_range * cancel_at || sz > best_range))
-                     take = true;
-               }
-               if(take)
-               {
-                  best_dir = cur_dir;
-                  best_a = cur_a;
-                  best_b = cur_b;
-                  best_count = nbase;
-                  best_range = sz;
-               }
-            }
+            const int bi = ev[k].base_i;
+            if(bases[bi].low < org1) { org1 = bases[bi].low; t_org1 = bases[bi].time; }
+            if(ev[k].extreme > tip1) { tip1 = ev[k].extreme; t_tip1 = ev[k].time; }
          }
-         cur_dir = d;
-         cur_a = i;
-         cur_b = i;
-         cur_count = 1;
+         corr_ext = ev[corr_start].extreme; t_corr = ev[corr_start].time;
+         for(int k = corr_start; k <= corr_end; k++)
+            if(ev[k].extreme < corr_ext) { corr_ext = ev[k].extreme; t_corr = ev[k].time; }
+         if(corr_ext < org1 - eps) continue; // коррекция снесла начало
+         tip2 = tip1; t_tip2 = t_tip1;
+         for(int k = i2_start; k <= i2_end; k++)
+            if(ev[k].extreme > tip2) { tip2 = ev[k].extreme; t_tip2 = ev[k].time; }
+         if(tip2 <= tip1 + eps) continue; // второй импульс не обновил первый
       }
       else
       {
-         cur_b = i;
-         cur_count++;
+         org1 = bases[ev[i1_start].base_i].high; t_org1 = bases[ev[i1_start].base_i].time;
+         tip1 = ev[i1_start].extreme; t_tip1 = ev[i1_start].time;
+         for(int k = i1_start; k <= i1_end; k++)
+         {
+            const int bi = ev[k].base_i;
+            if(bases[bi].high > org1) { org1 = bases[bi].high; t_org1 = bases[bi].time; }
+            if(ev[k].extreme < tip1) { tip1 = ev[k].extreme; t_tip1 = ev[k].time; }
+         }
+         corr_ext = ev[corr_start].extreme; t_corr = ev[corr_start].time;
+         for(int k = corr_start; k <= corr_end; k++)
+            if(ev[k].extreme > corr_ext) { corr_ext = ev[k].extreme; t_corr = ev[k].time; }
+         if(corr_ext > org1 + eps) continue;
+         tip2 = tip1; t_tip2 = t_tip1;
+         for(int k = i2_start; k <= i2_end; k++)
+            if(ev[k].extreme < tip2) { tip2 = ev[k].extreme; t_tip2 = ev[k].time; }
+         if(tip2 >= tip1 - eps) continue;
       }
-   }
 
-   // live segment
-   if(cur_dir != 0 && cur_a >= 0)
-   {
-      const int b0 = ev[cur_a].base_i;
-      double org, tip;
-      if(cur_dir > 0)
+      // продлить tip2 дальше по тому же направлению (безоткатное после ИКИ)
+      int i_tip_ev = i2_end;
+      for(int k = i2_end + 1; k < ne; k++)
       {
-         org = bases[b0].low; tip = bases[b0].high;
-         for(int j = cur_a; j <= cur_b; j++)
-         {
-            const int bi = ev[j].base_i;
-            if(bases[bi].low < org) org = bases[bi].low;
-            if(bases[bi].high > tip) tip = bases[bi].high;
-         }
+         if(ev[k].dir != d2) break;
+         if(d2 > 0 && ev[k].extreme > tip2) { tip2 = ev[k].extreme; t_tip2 = ev[k].time; i_tip_ev = k; }
+         if(d2 < 0 && ev[k].extreme < tip2) { tip2 = ev[k].extreme; t_tip2 = ev[k].time; i_tip_ev = k; }
       }
-      else
-      {
-         org = bases[b0].high; tip = bases[b0].low;
-         for(int j = cur_a; j <= cur_b; j++)
-         {
-            const int bi = ev[j].base_i;
-            if(bases[bi].high > org) org = bases[bi].high;
-            if(bases[bi].low < tip) tip = bases[bi].low;
-         }
-      }
-      if(cur_a > 0 && ev[cur_a - 1].dir == -cur_dir)
-      {
-         const double pe = ev[cur_a - 1].extreme;
-         if(cur_dir < 0 && pe > org) org = pe;
-         if(cur_dir > 0 && pe < org) org = pe;
-      }
-      const double sz = MathAbs(org - tip);
+
+      // база продолжения у Pro = экстремум коррекции (горизонталь 158.308 на скрине)
+      const double origin = corr_ext;
+      const double tip = tip2;
+      const double sz = MathAbs(tip - origin);
+      if(sz < MinContinuedMoveRange()) continue;
+
       int nbase = 0; int last_bi = -1;
-      for(int j = cur_a; j <= cur_b; j++)
-         if(ev[j].base_i != last_bi) { nbase++; last_bi = ev[j].base_i; }
-      const int span = MathAbs(ev[cur_a].rate_idx - ev[cur_b].rate_idx) + 1;
-      if(ImpulseQualified(sz, MathMax(nbase, MathMin(span, nbase + 2))))
+      for(int k = corr_start; k <= i_tip_ev; k++)
+         if(ev[k].base_i != last_bi) { nbase++; last_bi = ev[k].base_i; }
+      if(!ImpulseQualified(sz, MathMax(3, nbase))) continue;
+
+      // оценка: крупнее ход + новее tip
+      const double score = sz + (double)(nr - ev[i_tip_ev].rate_idx) * PointValue() * 0.01;
+      if(score > best_score)
       {
-         bool take = false;
-         if(best_dir == 0)
-            take = true;
-         else if(cur_dir == best_dir)
-         {
-            if(ev[cur_b].rate_idx <= ev[best_b].rate_idx)
-               take = true;
-         }
-         else
-         {
-            const bool newer = (ev[cur_b].rate_idx <= ev[best_b].rate_idx);
-            if(newer && (sz + 1.0e-12 >= best_range * cancel_at || sz > best_range))
-               take = true;
-         }
-         if(take)
-         {
-            best_dir = cur_dir;
-            best_a = cur_a;
-            best_b = cur_b;
-            best_count = nbase;
-            best_range = sz;
-         }
+         best_score = score;
+         best_dir = d2;
+         best_org1 = org1; best_tip1 = tip1; best_corr = corr_ext; best_tip = tip;
+         best_t1 = t_org1; best_t2 = t_tip1; best_t3 = t_corr; best_t4 = t_tip2;
+         best_i_tip = ev[i_tip_ev].rate_idx;
+         best_nbase = nbase;
+         best_i2_end = i_tip_ev;
       }
    }
 
-   if(best_dir == 0 || best_a < 0)
+   if(best_dir == 0 || best_i2_end < 0)
       return false;
 
    m.valid = true;
+   m.has_iki_z = true;
    m.dir = best_dir;
-   m.base_count = best_count;
-   const int b0 = ev[best_a].base_i;
-   if(best_dir > 0)
-   {
-      m.origin = bases[b0].low;
-      m.tip = bases[b0].high;
-      m.t_origin = bases[b0].time;
-      m.t_tip = bases[b0].time;
-      m.i_tip = bases[b0].idx;
-      for(int j = best_a; j <= best_b; j++)
-      {
-         const int bi = ev[j].base_i;
-         if(bases[bi].low < m.origin) { m.origin = bases[bi].low; m.t_origin = bases[bi].time; }
-         if(bases[bi].high >= m.tip) { m.tip = bases[bi].high; m.t_tip = bases[bi].time; m.i_tip = bases[bi].idx; }
-      }
-   }
-   else
-   {
-      m.origin = bases[b0].high;
-      m.tip = bases[b0].low;
-      m.t_origin = bases[b0].time;
-      m.t_tip = bases[b0].time;
-      m.i_tip = bases[b0].idx;
-      for(int j = best_a; j <= best_b; j++)
-      {
-         const int bi = ev[j].base_i;
-         if(bases[bi].high > m.origin) { m.origin = bases[bi].high; m.t_origin = bases[bi].time; }
-         if(bases[bi].low <= m.tip) { m.tip = bases[bi].low; m.t_tip = bases[bi].time; m.i_tip = bases[bi].idx; }
-      }
-   }
-   // Origin нового импульса = экстремум предыдущего (противоположного) узла пути.
-   // Покрывает: (а) два узла на одном внешнем; (б) развязку цепочки внешних
-   // (узел на последнем внешнем → односторонняя свеча).
-   if(best_a > 0 && ev[best_a - 1].dir == -best_dir)
-   {
-      const double prev_ext = ev[best_a - 1].extreme;
-      if(best_dir < 0 && prev_ext >= m.origin)
-      {
-         m.origin = prev_ext;
-         m.t_origin = ev[best_a - 1].time;
-      }
-      else if(best_dir > 0 && prev_ext <= m.origin)
-      {
-         m.origin = prev_ext;
-         m.t_origin = ev[best_a - 1].time;
-      }
-   }
+   m.origin = best_corr;       // 100% = база после коррекции ИКИ
+   m.tip = best_tip;
+   m.t_origin = best_t3;
+   m.t_tip = best_t4;
+   m.i_tip = best_i_tip;
    m.range = MathAbs(m.origin - m.tip);
+   m.base_count = best_nbase;
+   m.z_org1 = best_org1;
+   m.z_tip1 = best_tip1;
+   m.z_corr = best_corr;
+   m.z_t_org1 = best_t1;
+   m.z_t_tip1 = best_t2;
+   m.z_t_corr = best_t3;
 
+   // дотянуть tip по сырым барам после i_tip
    for(int i = m.i_tip - 1; i >= 1; i--)
    {
       double atr_i = 0.0;
@@ -5039,13 +4981,32 @@ void DrawFib30Line(const MqlRates &rates[])
       if(zw < 1) zw = 1;
       if(zw > 4) zw = 4;
       ENUM_LINE_STYLE zs = (zw > 1) ? STYLE_DASH : STYLE_DOT;
-      // как Sniper Pro: ОДНА диагональ origin → tip (безоткатное)
+      // риски 100%/0%: база = коррекция ИКИ (как горизонт 158.308 у Pro)
       DrawHLineSegment(live + "Z0", h0a, h0b, price_100, ColorContinuedMove, zs, zw, "");
       DrawHLineSegment(live + "Z1", h1a, h1b, price_0, ColorContinuedMove, zs, zw, "");
-      DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, ColorContinuedMove, zs, zw);
-      ObjectSetString(0, live + "Z0", OBJPROP_TOOLTIP, "Импульс: начало 100%");
-      ObjectSetString(0, live + "Z1", OBJPROP_TOOLTIP, "Импульс: кончик 0%");
-      ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP, "Безоткатное движение (одна диагональ, как Pro)");
+      ObjectSetString(0, live + "Z0", OBJPROP_TOOLTIP, "База Z / 100% (экстремум коррекции ИКИ)");
+      ObjectSetString(0, live + "Z1", OBJPROP_TOOLTIP, "Кончик Z / 0%");
+
+      // Z как у Pro: org1 → tip1 → corr → tip (четыре точки = буква Z + продолжение)
+      if(mv.has_iki_z)
+      {
+         DrawTrendSegment(live + "ZA", mv.z_t_org1, mv.z_org1, mv.z_t_tip1, mv.z_tip1, ColorContinuedMove, zs, zw);
+         DrawTrendSegment(live + "ZB", mv.z_t_tip1, mv.z_tip1, mv.z_t_corr, mv.z_corr, ColorContinuedMove, zs, zw);
+         DrawTrendSegment(live + "ZC", mv.z_t_corr, mv.z_corr, time_0, price_0, ColorContinuedMove, zs, zw);
+         ObjectSetString(0, live + "ZA", OBJPROP_TOOLTIP, "Z ИКИ: импульс1");
+         ObjectSetString(0, live + "ZB", OBJPROP_TOOLTIP, "Z ИКИ: коррекция");
+         ObjectSetString(0, live + "ZC", OBJPROP_TOOLTIP, "Z ИКИ: импульс2 / безоткатное");
+         if(ObjExists(live + "ZD")) ObjectDelete(0, live + "ZD");
+      }
+      else
+      {
+         DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, ColorContinuedMove, zs, zw);
+         ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP, "Безоткатное (без полного ИКИ)");
+         if(ObjExists(live + "ZA")) ObjectDelete(0, live + "ZA");
+         if(ObjExists(live + "ZB")) ObjectDelete(0, live + "ZB");
+         if(ObjExists(live + "ZC")) ObjectDelete(0, live + "ZC");
+      }
+
       if(ShowTipZeroLabel)
       {
          DrawText(live + "TIP", h1b, price_0, "-0.00", ColorContinuedMove, ANCHOR_LEFT_UPPER);
@@ -5060,6 +5021,9 @@ void DrawFib30Line(const MqlRates &rates[])
       if(ObjExists(live + "Z0")) ObjectDelete(0, live + "Z0");
       if(ObjExists(live + "Z1")) ObjectDelete(0, live + "Z1");
       if(ObjExists(live + "ZD")) ObjectDelete(0, live + "ZD");
+      if(ObjExists(live + "ZA")) ObjectDelete(0, live + "ZA");
+      if(ObjExists(live + "ZB")) ObjectDelete(0, live + "ZB");
+      if(ObjExists(live + "ZC")) ObjectDelete(0, live + "ZC");
       if(ObjExists(live + "TIP")) ObjectDelete(0, live + "TIP");
    }
 

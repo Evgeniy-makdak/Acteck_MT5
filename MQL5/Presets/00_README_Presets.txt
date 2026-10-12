@@ -1,1 +1,1 @@
-ASmart 3.6 — пресеты Acteck_v3.6_<PAIR>_<mode>.set
+ASmart 3.7 — Acteck_v3.7_<PAIR>_<mode>.set
