@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 3.2                                                       |
+//|  ASmart 3.3                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
-//|  Sniper: base bars + outside-bar path (corr then exit)            |
+//|  Sniper: base bars + deferred outside-bar path resolution         |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 3.2 — базовые/внешний бар; ShowBasePathDebug; ИКИ/КЗ; UX ASmart"
-#property version   "3.20"
+#property description "ASmart 3.3 — внешние бары с отложенной развязкой; путь базовых; UX ASmart"
+#property version   "3.30"
 
-#define EA_VERSION "3.2"
+#define EA_VERSION "3.3"
 
 
 //=========================
@@ -156,7 +156,7 @@ input int                  MaxPositions         = 1;
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart32";
+input string               CommentPrefix        = "ASmart33";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -554,7 +554,7 @@ struct SBaseBar
    double   low;
 };
 
-// Событие обновления базовой: одностороннее ИЛИ полвнешнего бара (2 события)
+// Событие обновления базовой: одностороннее; внешние — после отложенной развязки
 struct SBaseEvent
 {
    int      base_i;     // индекс в массиве базовых
@@ -1367,9 +1367,13 @@ void PushBaseEvent(SBaseEvent &ev[], const SBaseBar &bases[], const int base_i, 
    ev[n].rate_idx = bases[base_i].idx;
 }
 
-// Внешний бар: корректирует в обе стороны, затем путь в сторону выхода.
-// Порядок: если выход = продолжение prev → сначала коррекция (−prev), потом выход;
-// если выход против prev → сначала экстремум в сторону prev, потом выход.
+// Внешние бары (обновили high И low): НЕ раскрываем сразу.
+// Цепочка внешних копится (pending). Развязка — когда появится свеча
+// с обновлением ТОЛЬКО одной стороны:
+//   только min → узел = HIGH последнего внешнего → LOW этой свечи;
+//   только max → узел = LOW  последнего внешнего → HIGH этой свечи.
+// (урок: внешние 5→4→3, затем 2 только min ⇒ ломаная max(3)→min(2)).
+// Хвост истории из неразвязанных внешних: fallback OutsideExitDir последнего.
 int ExpandBaseEvents(const SBaseBar &bases[], const MqlRates &rates[], SBaseEvent &ev[])
 {
    ArrayResize(ev, 0);
@@ -1377,7 +1381,9 @@ int ExpandBaseEvents(const SBaseBar &bases[], const MqlRates &rates[], SBaseEven
    if(nb < 2)
       return 0;
 
+   int pending_out = -1; // индекс последней «висящей» внешней базовой
    int prev_seg = 0;
+
    for(int i = 1; i < nb; i++)
    {
       const bool up = (bases[i].high > bases[i - 1].high);
@@ -1385,34 +1391,38 @@ int ExpandBaseEvents(const SBaseBar &bases[], const MqlRates &rates[], SBaseEven
       if(!up && !dn)
          continue;
 
-      if(up && !dn)
+      if(up && dn)
       {
-         PushBaseEvent(ev, bases, i, 1);
-         prev_seg = 1;
-         continue;
-      }
-      if(dn && !up)
-      {
-         PushBaseEvent(ev, bases, i, -1);
-         prev_seg = -1;
+         // внешний бар — ждём одностороннее обновление
+         pending_out = i;
          continue;
       }
 
-      // Внешний бар (обновил и high, и low) — кейс 3-й чёрной свечи на уроке
-      const int exit_d = OutsideExitDir(bases[i - 1], bases[i], rates);
-      int first_d = exit_d;
-      if(prev_seg == 0)
-         first_d = -exit_d; // оба экстремума: сначала против выхода, потом выход
-      else if(exit_d == prev_seg)
-         first_d = -prev_seg; // коррекция, затем продолжение
-      else
-         first_d = prev_seg;  // добор по старому направлению, затем разворот/выход
+      const int d = up ? 1 : -1;
 
-      if(first_d != 0 && first_d != exit_d)
-         PushBaseEvent(ev, bases, i, first_d);
-      PushBaseEvent(ev, bases, i, exit_d);
-      prev_seg = exit_d;
+      if(pending_out >= 0)
+      {
+         // действительная коррекция на последнем внешнем = экстремум ПРОТИВ d
+         PushBaseEvent(ev, bases, pending_out, -d);
+         pending_out = -1;
+      }
+
+      PushBaseEvent(ev, bases, i, d);
+      prev_seg = d;
    }
+
+   // незакрытая цепочка внешних на правом краю истории
+   if(pending_out >= 0)
+   {
+      const int exit_d = OutsideExitDir(bases[pending_out - 1], bases[pending_out], rates);
+      // как на одиночном внешнем после развязки: сначала против выхода, потом выход
+      if(prev_seg == 0 || exit_d == prev_seg)
+         PushBaseEvent(ev, bases, pending_out, -exit_d);
+      else if(exit_d != prev_seg)
+         PushBaseEvent(ev, bases, pending_out, prev_seg);
+      PushBaseEvent(ev, bases, pending_out, exit_d);
+   }
+
    return ArraySize(ev);
 }
 
@@ -1495,6 +1505,13 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
                   if(bases[bi].low < tip) tip = bases[bi].low;
                }
             }
+            // развязка внешнего / смена направления: origin = экстремум предыдущего узла
+            if(cur_a > 0 && ev[cur_a - 1].dir == -cur_dir)
+            {
+               const double pe = ev[cur_a - 1].extreme;
+               if(cur_dir < 0 && pe > org) org = pe;
+               if(cur_dir > 0 && pe < org) org = pe;
+            }
             const double sz = MathAbs(org - tip);
             int nbase = 0;
             int last_bi = -1;
@@ -1552,6 +1569,12 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
             if(bases[bi].low < tip) tip = bases[bi].low;
          }
       }
+      if(cur_a > 0 && ev[cur_a - 1].dir == -cur_dir)
+      {
+         const double pe = ev[cur_a - 1].extreme;
+         if(cur_dir < 0 && pe > org) org = pe;
+         if(cur_dir > 0 && pe < org) org = pe;
+      }
       const double sz = MathAbs(org - tip);
       int nbase = 0; int last_bi = -1;
       for(int j = cur_a; j <= cur_b; j++)
@@ -1605,22 +1628,21 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          if(bases[bi].low <= m.tip) { m.tip = bases[bi].low; m.t_tip = bases[bi].time; m.i_tip = bases[bi].idx; }
       }
    }
-   // После действительной коррекции на внешнем баре origin нового импульса вниз = хай этого бара
-   // (уже учтено: сегмент начинается с up-события на том же баре, затем down — cur_a на down).
-   // Уточнение: если первый event сегмента — down на внешнем после up на том же base_i,
-   // origin должен быть high этой свечи.
-   if(best_a > 0 && ev[best_a].base_i == ev[best_a - 1].base_i && ev[best_a - 1].dir == -best_dir)
+   // Origin нового импульса = экстремум предыдущего (противоположного) узла пути.
+   // Покрывает: (а) два узла на одном внешнем; (б) развязку цепочки внешних
+   // (узел на последнем внешнем → односторонняя свеча).
+   if(best_a > 0 && ev[best_a - 1].dir == -best_dir)
    {
-      const int bi = ev[best_a].base_i;
-      if(best_dir < 0)
+      const double prev_ext = ev[best_a - 1].extreme;
+      if(best_dir < 0 && prev_ext >= m.origin)
       {
-         m.origin = bases[bi].high;
-         m.t_origin = bases[bi].time;
+         m.origin = prev_ext;
+         m.t_origin = ev[best_a - 1].time;
       }
-      else
+      else if(best_dir > 0 && prev_ext <= m.origin)
       {
-         m.origin = bases[bi].low;
-         m.t_origin = bases[bi].time;
+         m.origin = prev_ext;
+         m.t_origin = ev[best_a - 1].time;
       }
    }
    m.range = MathAbs(m.origin - m.tip);
@@ -4830,7 +4852,7 @@ void DrawBasePathDebug(const MqlRates &rates[])
       {
          mark = "◆";
          mc = ColorOutsideBar;
-         tip = "Внешний бар: 2-й узел (выход) — оба экстремума учтены";
+         tip = "Развязка внешнего: узел после цепочки внешних (корр./выход)";
       }
       else if(corr)
       {
@@ -4843,7 +4865,7 @@ void DrawBasePathDebug(const MqlRates &rates[])
       {
          mark = "◇";
          mc = ColorOutsideBar;
-         tip = "Внешний бар: 1-й узел (коррекция внутри бара)";
+         tip = "Узел на последнем внешнем баре (ожидали одностороннее обновление)";
       }
 
       const string tn = pfx + "M" + IntegerToString(i);
@@ -5316,7 +5338,7 @@ bool RangeHadConsolidation(const MqlRates &rates[], const datetime t_from, const
 
 // --- PAT 01: ПД тип 1 ---
 //=========================
-// Sniper 3.1: ИКИ → КЗ (+ внешний бар как два события пути)
+// Sniper 3.3: ИКИ → КЗ (внешние бары — отложенная развязка пути)
 //=========================
 
 void ResetModelZone(SModelZone &z)
@@ -5356,7 +5378,7 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
    const int sec = PeriodSeconds(Timeframe);
    const datetime now_t = rates[0].time;
 
-   // События пути: односторонние обновления + внешний бар = 2 узла (корр. → выход)
+   // События пути: односторонние + развязка цепочки внешних (против обновления → tip)
    SBaseEvent ev[];
    const int ne = ExpandBaseEvents(bases, rates, ev);
    if(ne < 6)
