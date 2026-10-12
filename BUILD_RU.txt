@@ -1,3 +1,2 @@
-Compile MQL5/Experts/ASmart 3.5.mq5 (F7) → ASmart 3.5.ex5
-Каждый коммит логики: поднять #property version / EA_VERSION и имя файла.
-PDF: python3 tools/build_manual_pdf_35.py
+Compile MQL5/Experts/ASmart 3.6.mq5 (F7) → ASmart 3.6.ex5
+PDF: python3 tools/build_manual_pdf_36.py

@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 3.5                                                       |
+//|  ASmart 3.6                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
-//|  Sniper: path polyline + IKI KZ thin H-lines (Pro visual parity)   |
+//|  Sniper: single Z diagonal + IKI KZ thin H-lines (Pro parity)      |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 3.5 — ломаная безоткатных как Pro + КЗ тонкой горизонталью"
-#property version   "3.50"
+#property description "ASmart 3.6 — Z одна диагональ как Pro; КЗ тонкой горизонталью"
+#property version   "3.60"
 
-#define EA_VERSION "3.5"
+#define EA_VERSION "3.6"
 
 
 //=========================
@@ -156,7 +156,7 @@ input int                  MaxPositions         = 1;
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart35";
+input string               CommentPrefix        = "ASmart36";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -273,10 +273,10 @@ input bool                 ShowZoneFill         = false;  // заливка зо
 input bool                 ShowFib30            = true;   // вспомог. линия «30» (UX ASmart)
 input bool                 ShowModelFib382      = false;  // базовая модель: линия 38.2% (выкл. — не нужна для входа)
 input bool                 ShowModelFib236      = false;  // каскад: линия 23.6% (выкл. по умолч.)
-input bool                 ShowContinuedMoveZ   = true;   // ломаная безоткатных по базовым (как Pro)
+input bool                 ShowContinuedMoveZ   = true;   // Z: одна диагональ безоткатного (как Pro)
 input bool                 ShowTipZeroLabel     = true;   // подпись «-0.00» у кончика хода (как Pro)
-input bool                 ShowBasePathDebug    = false;  // ОТЛАДКА: метки ✓/✗/◇ на узлах пути
-input int                  BasePathMaxBars      = 120;    // глубина ломаной пути (баров)
+input bool                 ShowBasePathDebug    = false;  // ОТЛАДКА: ломаная узлов + ✓/✗/◇
+input int                  BasePathMaxBars      = 80;     // глубина отладки пути (баров)
 input color                ColorBasePath        = clrDodgerBlue; // ломаная пути базовых
 input color                ColorValidCorr       = clrLime;       // действительная коррекция
 input color                ColorInvalidCorr     = clrTomato;     // недействительная / внутренний бар
@@ -1524,7 +1524,23 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
             const int span = MathAbs(ev[cur_a].rate_idx - ev[cur_b].rate_idx) + 1;
             if(ImpulseQualified(sz, MathMax(nbase, MathMin(span, nbase + 2))))
             {
-               if(best_dir == 0 || ev[cur_b].rate_idx <= ev[best_b].rate_idx)
+               // Pro: Z = безоткатный импульс; мелкий откат противоположного направления
+               // не перехватывает диагональ, пока < cancel (обычно 50%) от текущего Z.
+               bool take = false;
+               if(best_dir == 0)
+                  take = true;
+               else if(cur_dir == best_dir)
+               {
+                  if(ev[cur_b].rate_idx <= ev[best_b].rate_idx)
+                     take = true;
+               }
+               else
+               {
+                  const bool newer = (ev[cur_b].rate_idx <= ev[best_b].rate_idx);
+                  if(newer && (sz + 1.0e-12 >= best_range * cancel_at || sz > best_range))
+                     take = true;
+               }
+               if(take)
                {
                   best_dir = cur_dir;
                   best_a = cur_a;
@@ -1584,7 +1600,21 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       const int span = MathAbs(ev[cur_a].rate_idx - ev[cur_b].rate_idx) + 1;
       if(ImpulseQualified(sz, MathMax(nbase, MathMin(span, nbase + 2))))
       {
-         if(best_dir == 0 || ev[cur_b].rate_idx <= ev[best_b].rate_idx)
+         bool take = false;
+         if(best_dir == 0)
+            take = true;
+         else if(cur_dir == best_dir)
+         {
+            if(ev[cur_b].rate_idx <= ev[best_b].rate_idx)
+               take = true;
+         }
+         else
+         {
+            const bool newer = (ev[cur_b].rate_idx <= ev[best_b].rate_idx);
+            if(newer && (sz + 1.0e-12 >= best_range * cancel_at || sz > best_range))
+               take = true;
+         }
+         if(take)
          {
             best_dir = cur_dir;
             best_a = cur_a;
@@ -4807,43 +4837,11 @@ void Fib30ArchiveCurrent()
 }
 
 
-// Ломаная безоткатных движений по событиям базовых — как синий пунктир Sniper Pro.
+// 3.5 ошибочно рисовал всю ломаную как Z. Pro = одна диагональ.
+// Функция только чистит старые PATH_* объекты.
 void DrawSniperPathLegs(const MqlRates &rates[])
 {
-   const string pfx = Prefix() + "PATH_";
-   DeleteObjectsWithPrefix(pfx);
-   if(!ShowContinuedMoveZ)
-      return;
-
-   const int nr = ArraySize(rates);
-   if(nr < 20)
-      return;
-
-   const int look = MathMin(nr - 1, MathMax(30, BasePathMaxBars));
-   SBaseBar bases[];
-   const int nb = BuildBaseBars(rates, look, bases);
-   if(nb < 2)
-      return;
-
-   SBaseEvent ev[];
-   const int ne = ExpandBaseEvents(bases, rates, ev);
-   if(ne < 2)
-      return;
-
-   int zw = WidthContinuedMove;
-   if(zw < 1) zw = 1;
-   if(zw > 4) zw = 4;
-   const ENUM_LINE_STYLE zs = (zw > 1) ? STYLE_DASH : STYLE_DOT;
-
-   for(int i = 1; i < ne; i++)
-   {
-      const string nm = pfx + "L" + IntegerToString(i);
-      DrawTrendSegment(nm, ev[i - 1].time, ev[i - 1].extreme, ev[i].time, ev[i].extreme,
-                       ColorContinuedMove, zs, zw);
-      ObjectSetInteger(0, nm, OBJPROP_BACK, false);
-      ObjectSetInteger(0, nm, OBJPROP_ZORDER, 40);
-      ObjectSetString(0, nm, OBJPROP_TOOLTIP, "Безоткатное / путь базовых свечей (Снайпер)");
-   }
+   DeleteObjectsWithPrefix(Prefix() + "PATH_");
 }
 
 // Отладка пути: ломаная по событиям базовых + метки ✓/✗/внешний бар (как слайды Снайпер).
@@ -4869,7 +4867,17 @@ void DrawBasePathDebug(const MqlRates &rates[])
    if(ne < 2)
       return;
 
-   // Маркеры на событиях (ломаная уже в DrawSniperPathLegs): коррекция / продолжение / внешний (два события на одном base_i)
+      // 1) Ломаная узлов (только отладка)
+   for(int i = 1; i < ne; i++)
+   {
+      const string nm = pfx + "L" + IntegerToString(i);
+      DrawTrendSegment(nm, ev[i - 1].time, ev[i - 1].extreme, ev[i].time, ev[i].extreme,
+                       ColorBasePath, STYLE_SOLID, 2);
+      ObjectSetInteger(0, nm, OBJPROP_BACK, false);
+      ObjectSetInteger(0, nm, OBJPROP_ZORDER, 50);
+   }
+
+   // 2) Маркеры на событиях
    int prev_dir = 0;
    for(int i = 0; i < ne; i++)
    {
@@ -4984,11 +4992,12 @@ void DrawFib30Line(const MqlRates &rates[])
 
    Fib30HistoryPurge(have_mv);
 
+   DeleteObjectsWithPrefix(Prefix() + "PATH_"); // 3.5 ломаная снята — Z как у Pro
+
    if(!have_mv)
    {
       DeleteObjectsWithPrefix(live);
       g_fib30_retraced = false;
-      DrawSniperPathLegs(rates); // путь по истории даже без актуального Z
       DrawModelFibOverlays(rates);
       return;
    }
@@ -5024,21 +5033,19 @@ void DrawFib30Line(const MqlRates &rates[])
    if((long)(h1b - h1a) < (long)sec * 6)
       h1b = (datetime)((long)h1a + (long)sec * 8);
 
-   // Ломаная безоткатных — как Pro (не одна диагональ последнего импульса)
-   DrawSniperPathLegs(rates);
-
    if(ShowContinuedMoveZ)
    {
       int zw = WidthContinuedMove;
       if(zw < 1) zw = 1;
       if(zw > 4) zw = 4;
       ENUM_LINE_STYLE zs = (zw > 1) ? STYLE_DASH : STYLE_DOT;
-      // короткие риски 100%/0% у актуального импульса (для «30» / входа)
+      // как Sniper Pro: ОДНА диагональ origin → tip (безоткатное)
       DrawHLineSegment(live + "Z0", h0a, h0b, price_100, ColorContinuedMove, zs, zw, "");
       DrawHLineSegment(live + "Z1", h1a, h1b, price_0, ColorContinuedMove, zs, zw, "");
-      if(ObjExists(live + "ZD")) ObjectDelete(0, live + "ZD"); // старая одна диагональ — убрана
-      ObjectSetString(0, live + "Z0", OBJPROP_TOOLTIP, "Импульс (базовые свечи): начало 100%");
-      ObjectSetString(0, live + "Z1", OBJPROP_TOOLTIP, "Импульс (базовые свечи): кончик 0%");
+      DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, ColorContinuedMove, zs, zw);
+      ObjectSetString(0, live + "Z0", OBJPROP_TOOLTIP, "Импульс: начало 100%");
+      ObjectSetString(0, live + "Z1", OBJPROP_TOOLTIP, "Импульс: кончик 0%");
+      ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP, "Безоткатное движение (одна диагональ, как Pro)");
       if(ShowTipZeroLabel)
       {
          DrawText(live + "TIP", h1b, price_0, "-0.00", ColorContinuedMove, ANCHOR_LEFT_UPPER);
