@@ -1,4 +1,4 @@
-# ASmart 4.2 — изменения
+# ASmart 4.21 — изменения
 
 ## 2026-10-13 — 4.21: Сейф двумя сделками
 
@@ -21,16 +21,16 @@
 
 ## Код
 
-- Новый файл: `MQL5/Experts/ASmart 4.2.mq5` (`#property version 4.20`, префикс `ASmart42_`).
+- Файл: `MQL5/Experts/ASmart 4.21.mq5` (`#property version 4.21`, префикс `ASmart421_`).
 - Паттерны 03/04 переименованы: `PAT_EXP_T1` / `PAT_EXP_T2`.
 - `PD_ContinuedExitPct=170` — определение продолженного по уроку cont.
 - Детект Exp T1: откат 35–50%, пробой обеих границ, ЗУ = 30% пробойного хода.
 - Детект Exp T2: ликвидность за tip → зона дисбаланса → вход по РМ.
 - Каскад 3/4: отмена >100%; Casc3 — пропуск 1-го РМ; Casc4 — возврат >50%, РМ@70%.
 - `TryLessonStructureEntries()` — единая точка входов по урокам.
-- Пресеты `Acteck_v4.2_*.set`.
+- Пресеты `Acteck_v4.21_*.set`.
 
 ## Документы
 
-- `README.md`, `UserGuide_ASmart_4.2_RU.txt`, `docs/SNIPER_PARITY_V4_RU.md`
-- `ASmart_4.2_Manual_RU.txt` (текстовый мануал; PDF при необходимости собрать отдельно)
+- `README.md`, `UserGuide_ASmart_4.21_RU.txt`, `docs/SNIPER_PARITY_V4_RU.md`
+- `ASmart_4.21_Manual_RU.txt` (текстовый мануал; PDF при необходимости собрать отдельно)

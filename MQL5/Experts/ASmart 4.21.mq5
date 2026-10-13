@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.2                                                       |
+//|  ASmart 4.21                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.2 — ПД/расширение/каскад + Сейф двумя сделками (1R+2R)"
+#property description "ASmart 4.21 — ПД/расширение/каскад + Сейф двумя сделками (1R+2R)"
 #property version   "4.21"
 
-#define EA_VERSION "4.2"
+#define EA_VERSION "4.21"
 
 
 //=========================
@@ -160,7 +160,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart42";
+input string               CommentPrefix        = "ASmart421";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;

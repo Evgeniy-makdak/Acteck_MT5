@@ -1,4 +1,4 @@
-Compile MQL5/Experts/ASmart 4.2.mq5 (F7)
-Карточка: UserGuide_ASmart_4.2_RU.txt
-Мануал: ASmart_4.2_Manual_RU.pdf
+Compile MQL5/Experts/ASmart 4.21.mq5 (F7)
+Карточка: UserGuide_ASmart_4.21_RU.txt
+Мануал: ASmart_4.21_Manual_RU.pdf
 Правила уроков: tools/lessons_mt/

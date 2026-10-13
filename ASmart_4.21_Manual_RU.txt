@@ -1,14 +1,14 @@
-ASmart 4.2 — краткий мануал (RU)
+ASmart 4.21 — краткий мануал (RU)
 ================================
 
-Файл эксперта: MQL5/Experts/ASmart 4.2.mq5
-Префикс объектов/сделок: ASmart42_
-Пресеты: MQL5/Presets/Acteck_v4.2_<PAIR>_<scalp|calm|swing_H1>.set
+Файл эксперта: MQL5/Experts/ASmart 4.21.mq5
+Префикс объектов/сделок: ASmart421_
+Пресеты: MQL5/Presets/Acteck_v4.21_<PAIR>_<scalp|calm|swing_H1>.set
 
 1. Установка
-   - MetaEditor → Compile ASmart 4.2.mq5
+   - MetaEditor → Compile ASmart 4.21.mq5
    - Снять предыдущий EA с графика
-   - Навесить ASmart 4.2, загрузить пресет пары
+   - Навесить ASmart 4.21, загрузить пресет пары
 
 2. Режимы сигналов
    - ИКИ-КЗ A/B/C: UseIKI_KZ_ForSignals=true (по умолчанию)

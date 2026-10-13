@@ -1,6 +1,6 @@
-# ASmart 4.2 (MT5)
+# ASmart 4.21 (MT5)
 
-`MQL5/Experts/ASmart 4.2.mq5` — префикс объектов `ASmart42_`
+`MQL5/Experts/ASmart 4.21.mq5` — префикс объектов `ASmart421_`
 
 ## Sniper: уроки МТ + ИКИ-КЗ
 
@@ -16,5 +16,5 @@
 
 **Сейф:** `SafeSplitDeals=true` — две сделки сразу (TP 1R + TP 2R), hedging, `MaxPositions≥2`.
 
-Снять EA → F7 → навесить **ASmart 4.2** (сборка 4.21). Пресеты: `MQL5/Presets/Acteck_v4.2_*.set`.  
-Карточка: `UserGuide_ASmart_4.2_RU.txt`. Извлечённые правила: `tools/lessons_mt/`.
+Снять EA → F7 → навесить **ASmart 4.21**. Пресеты: `MQL5/Presets/Acteck_v4.21_*.set`.  
+Карточка: `UserGuide_ASmart_4.21_RU.txt`. Извлечённые правила: `tools/lessons_mt/`.
