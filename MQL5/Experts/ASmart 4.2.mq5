@@ -5,8 +5,8 @@
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.2 — ПД/расширение/каскад строго по урокам + ИКИ-КЗ A/B/C"
-#property version   "4.20"
+#property description "ASmart 4.2 — ПД/расширение/каскад + Сейф двумя сделками (1R+2R)"
+#property version   "4.21"
 
 #define EA_VERSION "4.2"
 
@@ -156,7 +156,7 @@ input double               PC_Vol2              = 0.50;   // fraction of initial
 
 input bool                 OnlyOneTradePerBar   = true;
 input int                  ReEntries            = 0;      // additional entries per zone (0 => 1 trade/zone)
-input int                  MaxPositions         = 1;
+input int                  MaxPositions         = 2;      // при SafeSplitDeals нужно ≥2 (хедж-счёт)
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
@@ -246,8 +246,12 @@ input bool                 ShowFearIndexHUD     = true;   // число спра
 input int                  FearIndexPeriod      = 14;     // период RSI-базы индекса
 input bool                 FilterByFearIndex    = true;   // на страхе не продаём, на жадности не покупаем
 input bool                 AutoTPByFearIndex    = true;   // TP = SL × множитель зоны индекса
-input bool                 UseSafeRule          = true;   // сейф: 50% на min(1R, 0.30×импульс) + BE
-input double               SafeImpulseK         = 0.30;   // доля импульса для сейфа (не дальше 1R)
+input bool                 UseSafeRule          = true;   // правило Сейф (Sniper)
+input bool                 SafeSplitDeals       = true;   // true: две сделки сразу (1R + runner); false: одна + partial
+input double               SafeSplitVol1        = 0.50;   // доля объёма на Сейф (TP=1R)
+input double               SafeSplitVol2        = 0.50;   // доля объёма на runner (TP=SafeRunnerRR)
+input double               SafeRunnerRR         = 2.0;    // RR второй сделки (обычно 2.0 = 2R)
+input double               SafeImpulseK         = 0.30;   // (режим partial) доля импульса для сейфа ≤1R
 input bool                 ScaleLotBySetupQuality = false; // старый масштаб лота по «зрелости» сетапа (не индекс)
 input int                  SetupQualityMinToTrade = 0;    // 0 = выкл.; порог зрелости сетапа (не индекс страха)
 input int                  FearHistoryLen       = 24;     // точки истории для ломаной
@@ -684,6 +688,9 @@ bool   DetectMTFConfluence(const int direction);
 int    EffectiveSwingDepth();
 int    EffectiveSafeStep1Points(const double entry, const double sl);
 double ComputeSafeTpPrice(const int direction, const double entry, const double sl);
+bool   SafeSplitDealsActive();
+double TpAtRiskReward(const int direction, const double entry, const double sl, const double rr);
+int    PositionsSlotsNeeded();
 void   PersistLastEntrySignal();
 void   LoadLastEntrySignal();
 void   DrawEntrySLTPLevels(const datetime t_sig, const int direction, const double entry, const double sl, const double safe_tp);
@@ -997,6 +1004,10 @@ void LogEnvironment()
 
    if(!g_isHedging)
       Log("WARNING: Account margin mode is not RETAIL_HEDGING. The EA is designed for hedging accounts (TZ 1.8). Trading/partial close behaviour may differ on netting accounts.");
+   if(UseSafeRule && SafeSplitDeals)
+      Log(StringFormat("SafeSplitDeals=%s | Vol1=%.0f%%@1R Vol2=%.0f%%@%.1fR | MaxPositions=%d",
+                       (SafeSplitDealsActive() ? "ON(hedge)" : "OFF(need hedge)"),
+                       100.0 * SafeSplitVol1, 100.0 * SafeSplitVol2, SafeRunnerRR, MaxPositions));
 }
 
 //=========================
@@ -6893,6 +6904,28 @@ double ApplyProbabilityToVolume(const double volume, const int setup_quality)
    return ClampVolume(scaled);
 }
 
+bool SafeSplitDealsActive()
+{
+   // Две отдельные позиции с разными TP возможны только на hedging-счёте.
+   return (UseSafeRule && SafeSplitDeals && g_isHedging);
+}
+
+int PositionsSlotsNeeded()
+{
+   return SafeSplitDealsActive() ? 2 : 1;
+}
+
+double TpAtRiskReward(const int direction, const double entry, const double sl, const double rr)
+{
+   double p = PointValue();
+   double sl_dist = MathAbs(entry - sl);
+   if(sl_dist <= 0.0)
+      sl_dist = MathMax(1, SL_Points) * p;
+   double mult = MathMax(0.1, rr);
+   double tp = (direction > 0) ? (entry + mult * sl_dist) : (entry - mult * sl_dist);
+   return NormalizePrice(tp);
+}
+
 int EffectiveSafeStep1Points(const double entry, const double sl)
 {
    if(!UseSafeRule)
@@ -6903,7 +6936,8 @@ int EffectiveSafeStep1Points(const double entry, const double sl)
    int one_r = (int)MathRound(MathAbs(entry - sl) / p);
    if(one_r < 1)
       one_r = PC_Step1;
-   if(g_lastImpulseRange > p && SafeImpulseK > 0.0)
+   // В режиме двух сделок Сейф = ровно 1R; кап по импульсу — только для partial-режима
+   if(!SafeSplitDealsActive() && g_lastImpulseRange > p && SafeImpulseK > 0.0)
    {
       int by_imp = (int)MathRound(SafeImpulseK * g_lastImpulseRange / p);
       if(by_imp > 0 && by_imp < one_r)
@@ -6922,6 +6956,9 @@ double ComputeSafeTpPrice(const int direction, const double entry, const double 
    double p = PointValue();
    if(p <= 0.0 || entry <= 0.0)
       return 0.0;
+   // Split-режим: линия «Сейф» = 1R к стопу
+   if(SafeSplitDealsActive())
+      return TpAtRiskReward(direction, entry, sl, 1.0);
    int step_pts = EffectiveSafeStep1Points(entry, sl);
    if(!UseSafeRule && PC_Step1 > 0)
       step_pts = PC_Step1;
@@ -6967,9 +7004,10 @@ bool CanEnterNow(const datetime signal_bar_time, string &reason)
    if(MaxPositions > 0)
    {
       int pos = CountMyPositions();
-      if(pos >= MaxPositions)
+      int need = PositionsSlotsNeeded();
+      if(pos + need > MaxPositions)
       {
-         Log("Entry blocked: MaxPositions reached");
+         Log(StringFormat("Entry blocked: MaxPositions (have=%d need=%d max=%d)", pos, need, MaxPositions));
          reason = "blocked: MaxPositions";
          return false;
       }
@@ -7317,8 +7355,60 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
       return false;
    }
 
-   ulong deal = 0;
    string comment = CommentPrefix + " " + sig + " F" + IntegerToString(fear);
+
+   // --- Сейф двумя сделками: одна TP=1R, вторая TP=SafeRunnerRR (обычно 2R) ---
+   if(SafeSplitDealsActive())
+   {
+      double f1 = MathMax(0.05, MathMin(0.95, SafeSplitVol1));
+      double f2 = MathMax(0.05, MathMin(0.95, SafeSplitVol2));
+      double sumf = f1 + f2;
+      if(sumf > 1.0)
+      {
+         f1 /= sumf;
+         f2 /= sumf;
+      }
+      double vol_safe = ClampVolume(volume * f1);
+      double vol_run  = ClampVolume(volume * f2);
+      if(vol_safe <= 0.0 || vol_run <= 0.0)
+      {
+         Log("SafeSplit: volume too small to split into two deals");
+         return false;
+      }
+
+      double tp_safe = TpAtRiskReward(direction, entry, sl, 1.0);
+      double tp_run  = TpAtRiskReward(direction, entry, sl, MathMax(1.0, SafeRunnerRR));
+      double sl_s = sl, sl_r = sl;
+      AdjustStopsToBroker(direction, entry, sl_s, tp_safe);
+      AdjustStopsToBroker(direction, entry, sl_r, tp_run);
+
+      ulong deal_s = 0, deal_r = 0;
+      bool ok_s = SendDeal(direction, vol_safe, sl_s, tp_safe, comment + " Safe1R", deal_s);
+      bool ok_r = SendDeal(direction, vol_run,  sl_r, tp_run,  comment + " Run" + DoubleToString(MathMax(1.0, SafeRunnerRR), 0) + "R", deal_r);
+
+      if(ok_s || ok_r)
+      {
+         trades_done++;
+         MarkTradeInBar(signal_bar.time);
+         Log(StringFormat("SafeSplit %s Safe1R vol=%.2f deal=%I64u %s | Run%.0fR vol=%.2f deal=%I64u %s | Fear=%d",
+                          (direction > 0 ? "BUY" : "SELL"),
+                          vol_safe, deal_s, (ok_s ? "OK" : "FAIL"),
+                          MathMax(1.0, SafeRunnerRR), vol_run, deal_r, (ok_r ? "OK" : "FAIL"),
+                          fear));
+         Log(StringFormat("Deal OK %s (split)", msg));
+         return true;
+      }
+
+      int err = GetLastError();
+      Log(StringFormat("SafeSplit SendDeal failed: last_error=%d", err));
+      Notify(msg + " [SafeSplit failed last_error=" + IntegerToString(err) + "]");
+      return false;
+   }
+
+   if(UseSafeRule && SafeSplitDeals && !g_isHedging)
+      Log("SafeSplitDeals ignored: netting account — одна сделка + PartialClose");
+
+   ulong deal = 0;
    if(SendDeal(direction, volume, sl, tp, comment, deal))
    {
       trades_done++;
@@ -7942,12 +8032,12 @@ void ManagePositions()
          }
       }
 
-	     // Ensure PC state (hedging + partial close)
+	     // Ensure PC state (hedging + partial close) — не нужен при SafeSplitDeals
 	     // NOTE: MT5 Position properties do not include POSITION_VOLUME_INITIAL.
 	     //       For PartialClose stability after EA restart we restore initial volume from trade history
 	     //       (first entry deal) only when PartialClose is enabled.
 	     int pc_idx = -1;
-	     if(PartialClose_On)
+	     if(PartialClose_On && !SafeSplitDealsActive())
 	     {
 	        int existing = FindPCIndex(ticket);
 	        double init_volume = volume;
@@ -7985,12 +8075,24 @@ void ManagePositions()
          if(safe_pc1 < 1) safe_pc1 = PC_Step1;
       }
 
-      // Breakeven (v1.11): BE only after PartialClose step1 is completed, then after BE_Trigger additional points.
-      // If PartialClose_On=false, classic BE logic is used (profit_points >= BE_Trigger).
-      if(UseBE)
+      const string pcom = PositionGetString(POSITION_COMMENT);
+      const bool split_safe_leg = (StringFind(pcom, "Safe1R") >= 0);
+      const bool split_run_leg  = (StringFind(pcom, " Run") >= 0);
+      const bool split_mode     = SafeSplitDealsActive();
+
+      // Breakeven:
+      // - split: на runner после достижения 1R (+ BE_Trigger); Safe1R закрывается тейком — BE не нужен
+      // - partial: после PC1, затем + BE_Trigger
+      // - иначе: классика по BE_Trigger
+      if(UseBE && !split_safe_leg)
       {
          bool be_allowed = false;
-         if(PartialClose_On)
+         if(split_mode && split_run_leg)
+         {
+            if(profit_points >= safe_pc1 + BE_Trigger)
+               be_allowed = true;
+         }
+         else if(PartialClose_On && !split_mode)
          {
             int pc_idx_be = FindPCIndex(ticket);
             if(pc_idx_be >= 0 && (g_pc_states[pc_idx_be].flags & 1) != 0)
@@ -7999,9 +8101,9 @@ void ManagePositions()
                   be_allowed = true;
             }
          }
-         else
+         else if(!PartialClose_On || split_mode)
          {
-            if(profit_points >= BE_Trigger)
+            if(profit_points >= (split_mode ? (safe_pc1 + BE_Trigger) : BE_Trigger))
                be_allowed = true;
          }
 
@@ -8042,8 +8144,11 @@ void ManagePositions()
       }
 
       // Trailing: после сейфа (или TS_Start пунктов) шаг TrailATR × ATR
-      bool trail_ok = UseTS;
-      if(trail_ok && UseSafeRule && PartialClose_On)
+      // В split-режиме трейлим только runner после 1R; Safe1R закрывается своим TP.
+      bool trail_ok = UseTS && !split_safe_leg;
+      if(trail_ok && split_mode)
+         trail_ok = (profit_points >= safe_pc1);
+      else if(trail_ok && UseSafeRule && PartialClose_On)
       {
          int pc_idx_tr = FindPCIndex(ticket);
          trail_ok = (pc_idx_tr >= 0 && (g_pc_states[pc_idx_tr].flags & 1) != 0);
@@ -8097,8 +8202,8 @@ void ManagePositions()
          }
       }
 
-      // Partial close
-      if(PartialClose_On)
+      // Partial close (не нужен при SafeSplitDeals — сейф уже отдельной сделкой с TP=1R)
+      if(PartialClose_On && !split_mode)
       {
          int idx = pc_idx;
          if(idx >= 0)

@@ -1,5 +1,12 @@
 # ASmart 4.2 — изменения
 
+## 2026-10-13 — 4.21: Сейф двумя сделками
+
+- `SafeSplitDeals=true`: одновременно две позиции по одной цене — TP **1R** (Safe) и TP **2R** (runner).
+- Доли: `SafeSplitVol1` / `SafeSplitVol2` (дефолт 50/50), runner RR: `SafeRunnerRR=2.0`.
+- `MaxPositions=2` по умолчанию. На netting — fallback к одной сделке + PartialClose.
+- BE/трейл только на runner после достижения 1R; PartialClose в split-режиме выкл.
+
 ## Источники (строго)
 
 | ID | Урок | Upload | Тема |

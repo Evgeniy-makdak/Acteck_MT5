@@ -15,7 +15,11 @@ ASmart 4.2 — краткий мануал (RU)
    - Урочные структуры: EnableLessonEntries=true
      ПД T1/T2, Exp T1/T2, Casc 3/4 — отдельные флаги Enable*_Entries
 
-3. Ключевые %
+3. Сейф (две сделки)
+   - SafeSplitDeals=true → Safe1R (TP=1×SL) + Run2R (TP=2×SL), один вход
+   - MaxPositions=2, hedging-счёт; netting → одна сделка + PartialClose
+
+4. Ключевые %
    - PD_ContinuedExitPct = 170
    - PD_MinCorrectionPct = 30
    - PD_RetestMaxHours = 6

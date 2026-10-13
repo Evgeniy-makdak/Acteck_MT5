@@ -14,5 +14,7 @@
 | **ИКИ-КЗ** | методички | A/B/C (пробой / ложный пробой / ретест) |
 | **Z** | SpeedPreset | ZigZag-плечо на ТФ графика |
 
-Снять EA → F7 → навесить **ASmart 4.2**. Пресеты: `MQL5/Presets/Acteck_v4.2_*.set`.  
+**Сейф:** `SafeSplitDeals=true` — две сделки сразу (TP 1R + TP 2R), hedging, `MaxPositions≥2`.
+
+Снять EA → F7 → навесить **ASmart 4.2** (сборка 4.21). Пресеты: `MQL5/Presets/Acteck_v4.2_*.set`.  
 Карточка: `UserGuide_ASmart_4.2_RU.txt`. Извлечённые правила: `tools/lessons_mt/`.
