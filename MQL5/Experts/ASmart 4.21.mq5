@@ -1157,17 +1157,15 @@ ENUM_SYMBOL_PROFILE DetectProfileFromSymbol()
    return PROFILE_CUSTOM;
 }
 
-// v1.11: built-in profiles no longer hard-code filter values.
-// All numeric filters (ATR_Min, MaxSpread, WickRatio, RangeMinATR_Mult)
-// are taken from the .set input parameters so the user can tune them freely.
-// The profile only selects which signal types (A/B/C) are enabled per pair.
+// 4.21: профили больше НЕ перезаписывают A/B/C.
+// Исторически JPY/CHF имели B=false (статистика CZ-эпохи); для фазы теста ИКИ-КЗ
+// все сигналы берутся строго из inputs/.set (по умолчанию A+B+C=true).
 void InitSymbolStrategyEffective()
 {
    ENUM_SYMBOL_PROFILE prof = SymbolStrategyProfile;
    if(prof == PROFILE_AUTO)
       prof = DetectProfileFromSymbol();
 
-   // Base values always come from the preset (.set) inputs — no hidden constants.
    g_EnableSignalA = EnableSignalA;
    g_EnableSignalB = EnableSignalB;
    g_EnableSignalC = EnableSignalC;
@@ -1176,34 +1174,27 @@ void InitSymbolStrategyEffective()
    g_WickRatio_Eff = WickRatio;
    g_RangeMinATR_Mult_Eff = RangeMinATR_Mult;
 
+   string sig = StringFormat("A=%s B=%s C=%s",
+                             (g_EnableSignalA ? "ON" : "off"),
+                             (g_EnableSignalB ? "ON" : "off"),
+                             (g_EnableSignalC ? "ON" : "off"));
+
    switch(prof)
    {
       case PROFILE_EURUSD:
-         g_EnableSignalA = true;
-         g_EnableSignalB = true;
-         g_EnableSignalC = true;
-         g_ProfileLogLine = "profile=EURUSD (A+B+C; filters from .set)";
+         g_ProfileLogLine = "profile=EURUSD (" + sig + "; filters from .set)";
          break;
       case PROFILE_GBPUSD:
-         g_EnableSignalA = true;
-         g_EnableSignalB = true;
-         g_EnableSignalC = true;
-         g_ProfileLogLine = "profile=GBPUSD (A+B+C; filters from .set)";
+         g_ProfileLogLine = "profile=GBPUSD (" + sig + "; filters from .set)";
          break;
       case PROFILE_USDJPY:
-         g_EnableSignalA = true;
-         g_EnableSignalB = false;
-         g_EnableSignalC = true;
-         g_ProfileLogLine = "profile=USDJPY (A+C, no B; filters from .set)";
+         g_ProfileLogLine = "profile=USDJPY (" + sig + "; filters from .set)";
          break;
       case PROFILE_USDCHF:
-         g_EnableSignalA = true;
-         g_EnableSignalB = false;
-         g_EnableSignalC = true;
-         g_ProfileLogLine = "profile=USDCHF (A+C, no B; filters from .set)";
+         g_ProfileLogLine = "profile=USDCHF (" + sig + "; filters from .set)";
          break;
       default:
-         g_ProfileLogLine = "profile=CUSTOM/FALLBACK (all from .set)";
+         g_ProfileLogLine = "profile=CUSTOM/FALLBACK (" + sig + "; all from .set)";
          break;
    }
 

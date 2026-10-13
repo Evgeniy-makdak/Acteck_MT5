@@ -82,6 +82,10 @@ EnablePD_T1_Entries / EnablePD_T2_Entries
 EnableExp_T1_Entries / EnableExp_T2_Entries
 EnableCasc3_Entries / EnableCasc4_Entries
 
+A/B/C от ИКИ-КЗ: EnableSignalA/B/C = true на всех пресетах (фаза теста).
+Исторический B=false у JPY/CHF снят; AUTO-профиль больше не глушит B.
+TradeEnabled=true в пресетах — иначе будет алерт без сделки.
+
 A/B/C от ИКИ-КЗ работают параллельно (UseIKI_KZ_ForSignals=true).
 
 
