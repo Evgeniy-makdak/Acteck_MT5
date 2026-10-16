@@ -1,4 +1,5 @@
-Compile MQL5/Experts/ASmart 4.21.mq5 (F7)
-Карточка: UserGuide_ASmart_4.21_RU.txt
-Мануал: ASmart_4.21_Manual_RU.pdf
-Правила уроков: tools/lessons_mt/
+Compile MQL5/Experts/ASmart 4.22.mq5 (F7)
+Карточка: UserGuide_ASmart_4.22_RU.txt
+Мануал: ASmart_4.22_Manual_RU.pdf / .txt
+Пресеты: MQL5/Presets/Acteck_v4.21_*.set (имена 4.21 — без перетаскивания)
+Изменения: CHANGES_V4.22.md

@@ -1,11 +1,11 @@
-ASmart 4.21 — Acteck_v4.21_<PAIR>_<mode>.set
+ASmart 4.22 — пресеты Acteck_v4.21_<PAIR>_<mode>.set
+(имена файлов пресетов намеренно оставлены v4.21 — параметры совместимы с 4.22)
 
-Сигналы A/B/C по умолчанию от ИКИ-КЗ (UseIKI_KZ_ForSignals=true).
-Legacy CZ не использовать для режима Pro.
+Сигналы (фаза теста):
+  EnableSignalA/B/C = true на всех парах
+  UseIKI_KZ_ForSignals = true
 
-Сигналы (фаза теста 4.21):
-  EnableSignalA=true  EnableSignalB=true  EnableSignalC=true
-  на ВСЕХ парах. Исторический B=false у JPY/CHF/BTC снят —
-  решение опиралось на CZ-статистику, а не на ИКИ-КЗ + Сейф 1R/2R.
+Сейф:
+  SafeSplitDeals = true (hedging), MaxPositions = 2
 
-Профиль SymbolStrategyProfile=AUTO больше НЕ перезаписывает A/B/C из .set.
+Режимы: scalp / calm / swing_H1

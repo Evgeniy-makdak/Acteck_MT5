@@ -1,2 +1,6 @@
 .DS_Store
 **/.DS_Store
+
+# Lesson media dumps (too large for git)
+tools/lessons_mt/praktika1_2128/
+tools/lessons_mt/kz_theory_pages/

@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.21                                                       |
+//|  ASmart 4.22                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.21 — ПД/расширение/каскад + Сейф двумя сделками (1R+2R)"
-#property version   "4.21"
+#property description "ASmart 4.22 — ИКИ-КЗ по уроку 2128 + ПД/расширение/каскад + Сейф 1R+2R"
+#property version   "4.22"
 
-#define EA_VERSION "4.21"
+#define EA_VERSION "4.22"
 
 
 //=========================
@@ -160,7 +160,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart421";
+input string               CommentPrefix        = "ASmart422";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -1157,7 +1157,7 @@ ENUM_SYMBOL_PROFILE DetectProfileFromSymbol()
    return PROFILE_CUSTOM;
 }
 
-// 4.21: профили больше НЕ перезаписывают A/B/C.
+   // 4.21+: профили больше НЕ перезаписывают A/B/C.
 // Исторически JPY/CHF имели B=false (статистика CZ-эпохи); для фазы теста ИКИ-КЗ
 // все сигналы берутся строго из inputs/.set (по умолчанию A+B+C=true).
 void InitSymbolStrategyEffective()
@@ -2794,7 +2794,8 @@ void MarkKzLevelSpent(const double lvl, const int dir)
    }
 }
 
-// Ближайшая ИКИ-КЗ → торговый пояс для A/B/C (Sniper Pro)
+// Ближайшая ИКИ-КЗ → торговый пояс для A/B/C (Sniper Pro).
+// Урок 2128: КЗ — прежде всего анализ; вход предпочитает основные (не «внутр»).
 bool FindTradeableIKI_KZ(const MqlRates &rates[],
                          double &zh, double &zl, double &lvl, int &dir,
                          datetime &t1, int &sid)
@@ -2813,26 +2814,33 @@ bool FindTradeableIKI_KZ(const MqlRates &rates[],
 
    int best = -1;
    double best_dist = 1.0e100;
-   for(int i = 0; i < ArraySize(g_structZones); i++)
+   // pass0 = только основные (pct!=3); pass1 = любые, если основных нет
+   for(int pass = 0; pass < 2 && best < 0; pass++)
    {
-      if(g_structZones[i].kind != SK_KZ) continue;
-      if(!g_structZones[i].valid && !g_structZones[i].active) continue;
-
-      const double L = (g_structZones[i].imp_start != 0.0)
-                       ? g_structZones[i].imp_start
-                       : (0.5 * (g_structZones[i].high + g_structZones[i].low));
-      if(L <= 0.0) continue;
-      if(IsKzLevelSpent(L, g_structZones[i].direction)) continue;
-      if(g_broken.active && g_broken.direction != 0 &&
-         MathAbs(0.5 * (g_broken.high + g_broken.low) - L) <= MathMax(PointValue()*8.0, half*0.5))
-         continue;
-
-      const double d = MathAbs(price - L);
-      if(d > max_d) continue;
-      if(d < best_dist)
+      best_dist = 1.0e100;
+      for(int i = 0; i < ArraySize(g_structZones); i++)
       {
-         best_dist = d;
-         best = i;
+         if(g_structZones[i].kind != SK_KZ) continue;
+         if(!g_structZones[i].valid && !g_structZones[i].active) continue;
+         // pct: 1=ИКИ, 2=пробой, 3=внутр
+         if(pass == 0 && g_structZones[i].pct >= 2.5) continue;
+
+         const double L = (g_structZones[i].imp_start != 0.0)
+                          ? g_structZones[i].imp_start
+                          : (0.5 * (g_structZones[i].high + g_structZones[i].low));
+         if(L <= 0.0) continue;
+         if(IsKzLevelSpent(L, g_structZones[i].direction)) continue;
+         if(g_broken.active && g_broken.direction != 0 &&
+            MathAbs(0.5 * (g_broken.high + g_broken.low) - L) <= MathMax(PointValue()*8.0, half*0.5))
+            continue;
+
+         const double d = MathAbs(price - L);
+         if(d > max_d) continue;
+         if(d < best_dist)
+         {
+            best_dist = d;
+            best = i;
+         }
       }
    }
    if(best < 0) return false;
@@ -5590,14 +5598,16 @@ void ResetModelZone(SModelZone &z)
    z.label = "";
 }
 
-// ИКИ → КЗ (методичка Снайпер):
+// ИКИ → КЗ (методичка + урок 2128 практика):
 // 1) Действительное ИКИ: импульс1 → коррекция (НЕ сносит начало импульса1) →
 //    импульс2, обновляющий экстремум импульса1 → КЗ на НАЧАЛЕ импульса1.
 // 2) После КЗ по тренду новая КЗ только через ИКИ противоположного направления.
-// 3) Пробитие ближайшей КЗ: крайняя точка действительного отката → новая КЗ.
+// 3) Пробитие ближайшей КЗ: крайняя точка ДЕЙСТВИТЕЛЬНОГО отката (базовые/события) → новая КЗ.
+// 4) Внутренние КЗ: валидное ИКИ внутри диапазона родительской КЗ (меньший порог хода).
+// 5) После пробоя линия КЗ не тянется вправо (t2 = время пробоя).
 void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
 {
-   // 4.0: КЗ нужны и для сигналов A/B/C, даже если линии на графике скрыты
+   // КЗ нужны и для сигналов A/B/C, даже если линии на графике скрыты
    if(!ShowPullbackZones && !ShowAll12Patterns && !(UseIKI_KZ_ForSignals && !UseLegacyCZSignals))
       return;
 
@@ -5619,6 +5629,8 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
    const int sec = PeriodSeconds(Timeframe);
    const datetime now_t = rates[0].time;
    const int max_kz = MathMax(1, MaxActiveKZ);
+   const double min_move_main = MinContinuedMoveRange();
+   const double min_move_inner = MathMax(PointValue() * 10.0, min_move_main * 0.35);
 
    SBaseEvent ev[];
    const int ne = ExpandBaseEvents(bases, rates, ev);
@@ -5626,11 +5638,12 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
       return;
 
    // Кандидаты по времени (старые → новые)
+   // c_src: 1=ИКИ, 2=пробитие, 3=внутренняя ИКИ
    double   c_level[];
    double   c_imp_end[];
    double   c_range[];
-   int      c_dir[];     // +1 поддержка (бычье ИКИ), -1 сопротивление
-   int      c_src[];     // 1=ИКИ, 2=пробитие
+   int      c_dir[];
+   int      c_src[];
    datetime c_t1[];
    int nc = 0;
    int last_side = 0;
@@ -5640,7 +5653,6 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
       const int d2 = ev[i].dir;
       if(d2 == 0) continue;
 
-      // импульс2 заканчивается на i
       int i2_end = i;
       int i2_start = i;
       for(int k = i - 1; k >= 0; k--)
@@ -5649,7 +5661,6 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
          else break;
       }
       if(i2_start < 1) continue;
-      // берём только завершение сегмента импульса2 (следующее событие другое или конец)
       if(i + 1 < ne && ev[i + 1].dir == d2) continue;
 
       int i_corr = i2_start - 1;
@@ -5688,12 +5699,10 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
          corr_ext = ev[corr_start].extreme;
          for(int k = corr_start; k <= corr_end; k++)
             if(ev[k].extreme < corr_ext) corr_ext = ev[k].extreme;
-         // коррекция не должна сносить начало импульса1
          if(corr_ext < imp1_org - eps) continue;
          imp2_tip = ev[i2_start].extreme;
          for(int k = i2_start; k <= i2_end; k++)
             if(ev[k].extreme > imp2_tip) imp2_tip = ev[k].extreme;
-         // действительное ИКИ: второй импульс обновляет первый
          if(imp2_tip <= imp1_tip + eps) continue;
       }
       else
@@ -5717,14 +5726,30 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
       }
 
       const double move = MathAbs(imp1_org - imp1_tip);
-      if(move < MinContinuedMoveRange()) continue;
+      const int kz_dir = d2;
 
-      const int kz_dir = d2; // бычье ИКИ → КЗ поддержки снизу; медвежье → сопротивление сверху
-      // после КЗ по тренду — только противоположное ИКИ
+      // внутренняя КЗ: целиком внутри диапазона уже найденной родительской КЗ
+      bool nested = false;
+      for(int p = 0; p < nc; p++)
+      {
+         if(c_src[p] == 3) continue; // не вкладываем во внутреннюю
+         const double lo = MathMin(c_level[p], c_imp_end[p]);
+         const double hi = MathMax(c_level[p], c_imp_end[p]);
+         if(imp1_org >= lo - eps && imp1_org <= hi + eps &&
+            imp1_tip >= lo - eps && imp1_tip <= hi + eps)
+         {
+            nested = true;
+            break;
+         }
+      }
+
+      const double min_need = nested ? min_move_inner : min_move_main;
+      if(move < min_need) continue;
+
+      // после КЗ по тренду — только противоположное ИКИ (урок); внутренние тоже чередуем
       if(last_side != 0 && kz_dir == last_side)
          continue;
 
-      // дедуп по уровню
       bool dup = false;
       for(int c = 0; c < nc; c++)
       {
@@ -5744,21 +5769,21 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
       c_imp_end[n] = imp1_tip;
       c_range[n] = move;
       c_dir[n] = kz_dir;
-      c_src[n] = 1;
+      c_src[n] = nested ? 3 : 1;
       c_t1[n] = t_org;
       nc = n + 1;
       last_side = kz_dir;
    }
 
-   // Пробитие ближайшей КЗ → новая КЗ на крайней точке действительного отката
+   // Пробитие ближайшей КЗ → новая КЗ на крайней точке действительного отката (базовые)
    const int n_iki = nc;
    for(int c = 0; c < n_iki; c++)
    {
+      if(c_src[c] == 3) continue; // пробой считаем от основных КЗ
       const double lvl = c_level[c];
       const int side = c_dir[c];
       const datetime t_z = c_t1[c];
 
-      // rates[0]=новые: идём от старых к новым → первый пробой по времени
       datetime t_break = 0;
       for(int s = nr - 2; s >= 1; s--)
       {
@@ -5768,27 +5793,41 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
       }
       if(t_break == 0) continue;
 
-      // крайняя точка отката между КЗ и пробоем
+      // 4.22: действительный откат — по событиям базовых (коррекция), иначе по базовым свечам
       double pb = 0.0;
       datetime t_pb = 0;
       bool have_pb = false;
-      if(side < 0)
+
+      for(int ei = 0; ei < ne; ei++)
       {
-         // пробой сопротивления вверх → новая поддержка на минимуме отката
-         for(int s = nr - 2; s >= 1; s--)
+         if(ev[ei].time <= t_z || ev[ei].time >= t_break) continue;
+         // пробой сопротивления вверх → откат = события вниз; наоборот — вверх
+         if(side < 0 && ev[ei].dir < 0)
          {
-            if(rates[s].time <= t_z || rates[s].time >= t_break) continue;
-            if(!have_pb || rates[s].low < pb)
-            { pb = rates[s].low; t_pb = rates[s].time; have_pb = true; }
+            if(!have_pb || ev[ei].extreme < pb)
+            { pb = ev[ei].extreme; t_pb = ev[ei].time; have_pb = true; }
+         }
+         else if(side > 0 && ev[ei].dir > 0)
+         {
+            if(!have_pb || ev[ei].extreme > pb)
+            { pb = ev[ei].extreme; t_pb = ev[ei].time; have_pb = true; }
          }
       }
-      else
+      if(!have_pb)
       {
-         for(int s = nr - 2; s >= 1; s--)
+         for(int bi = 0; bi < nb; bi++)
          {
-            if(rates[s].time <= t_z || rates[s].time >= t_break) continue;
-            if(!have_pb || rates[s].high > pb)
-            { pb = rates[s].high; t_pb = rates[s].time; have_pb = true; }
+            if(bases[bi].time <= t_z || bases[bi].time >= t_break) continue;
+            if(side < 0)
+            {
+               if(!have_pb || bases[bi].low < pb)
+               { pb = bases[bi].low; t_pb = bases[bi].time; have_pb = true; }
+            }
+            else
+            {
+               if(!have_pb || bases[bi].high > pb)
+               { pb = bases[bi].high; t_pb = bases[bi].time; have_pb = true; }
+            }
          }
       }
       if(!have_pb) continue;
@@ -5803,7 +5842,7 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
       if(dup) continue;
 
       const double move = MathAbs(lvl - pb);
-      if(move < MinContinuedMoveRange() * 0.5) continue;
+      if(move < min_move_main * 0.5) continue;
 
       const int n = nc;
       ArrayResize(c_level, n + 1);
@@ -5822,7 +5861,6 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
       last_side = new_dir;
    }
 
-   // упорядочить кандидатов по времени появления уровня
    for(int a = 0; a < nc; a++)
    {
       for(int b = a + 1; b < nc; b++)
@@ -5837,11 +5875,27 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
       }
    }
 
-   // Публикуем последние MaxActiveKZ
-   const int start = MathMax(0, nc - max_kz);
-   datetime t2 = now_t + (datetime)(sec * 40);
-   for(int j = start; j < nc; j++)
+   // Публикуем до MaxActiveKZ: свежие основные (ИКИ/пробой), затем внутренние
+   int pub[];
+   ArrayResize(pub, 0);
+   for(int j = nc - 1; j >= 0 && ArraySize(pub) < max_kz; j--)
    {
+      if(c_src[j] == 3) continue;
+      const int n = ArraySize(pub);
+      ArrayResize(pub, n + 1);
+      pub[n] = j;
+   }
+   for(int j = nc - 1; j >= 0 && ArraySize(pub) < max_kz; j--)
+   {
+      if(c_src[j] != 3) continue;
+      const int n = ArraySize(pub);
+      ArrayResize(pub, n + 1);
+      pub[n] = j;
+   }
+
+   for(int pi = 0; pi < ArraySize(pub); pi++)
+   {
+      const int j = pub[pi];
       const double lvl = c_level[j];
       const int kz_dir = c_dir[j];
       double z_hi, z_lo;
@@ -5855,13 +5909,29 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
          z_hi = lvl + zh * 0.65;
          z_lo = lvl - zh * 0.35;
       }
+
+      // урок 2128: после пробоя линию не тянем вправо
+      datetime t2 = now_t + (datetime)(sec * 40);
+      for(int s = nr - 2; s >= 1; s--)
+      {
+         if(rates[s].time <= c_t1[j]) continue;
+         if(kz_dir > 0 && rates[s].low  < lvl - eps) { t2 = rates[s].time; break; }
+         if(kz_dir < 0 && rates[s].high > lvl + eps) { t2 = rates[s].time; break; }
+      }
+      if(t2 < c_t1[j] + sec)
+         t2 = c_t1[j] + (datetime)(sec * 8);
+
       string lab;
       if(c_src[j] == 2)
          lab = StringFormat("КЗ пробой %s", (kz_dir > 0 ? "поддержка" : "сопротивление"));
+      else if(c_src[j] == 3)
+         lab = StringFormat("КЗ внутр %s", (kz_dir > 0 ? "поддержка" : "сопротивление"));
       else
          lab = StringFormat("КЗ ИКИ %s", (kz_dir > 0 ? "поддержка" : "сопротивление"));
+
+      // pct хранит тип источника (1/2/3) — для приоритета входа
       PushStructureZoneEx(SK_KZ, PAT_PD_T1, kz_dir, c_t1[j], t2,
-                          z_hi, z_lo, c_range[j], 0.0, lab, true, tf_tag,
+                          z_hi, z_lo, c_range[j], (double)c_src[j], lab, true, tf_tag,
                           c_level[j], c_imp_end[j]);
    }
 }
