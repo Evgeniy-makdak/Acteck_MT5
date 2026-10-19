@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.31                                                       |
+//|  ASmart 4.32                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.31 — зона 30% от экстремума Z до линии 30"
-#property version   "4.31"
+#property description "ASmart 4.32 — РМ на кончике Z, вход после возврата в 30%"
+#property version   "4.32"
 
-#define EA_VERSION "4.31"
+#define EA_VERSION "4.32"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart431";
+input string               CommentPrefix        = "ASmart432";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -665,6 +665,13 @@ int      g_expT1Trades = 0;
 datetime g_expT1Spent = 0;
 int      g_expT2Trades = 0;
 datetime g_expT2Spent = 0;
+datetime g_tipRmTime    = 0;
+int      g_tipRmDir     = 0;
+double   g_tipRmHigh    = 0.0;
+double   g_tipRmLow     = 0.0;
+double   g_tipRmP30     = 0.0;
+double   g_tipRmTip     = 0.0;
+datetime g_tipRmSpent   = 0;
 int      g_casc3Trades = 0;
 datetime g_casc3Spent = 0;
 datetime g_casc3FirstRM = 0; // время 1-го РМ после пробоя (пропуск)
@@ -3954,6 +3961,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart429_");
    if(StringFind(Prefix(), "ASmart430_") != 0)
       DeleteObjectsByPrefix("ASmart430_");
+   if(StringFind(Prefix(), "ASmart431_") != 0)
+      DeleteObjectsByPrefix("ASmart431_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5488,12 +5497,12 @@ void DrawZBundle(const string tag, const int dir,
       ObjectSetInteger(0, tag + "T", OBJPROP_FONTSIZE, active ? 9 : 8);
       ObjectSetString(0, tag + "30", OBJPROP_TOOLTIP,
                       active ? "30% актуально" : "30% неактуально: коррекция ≥50%");
-      // Зона ликвидности: от экстремума конца Z до линии 30% этого плеча.
-      // Покупка (импульс вверх) — голубая, продажа — жёлтая.
-      const color zfill = (dir > 0) ? C'170,214,240' : C'255,228,150';
+      // Зона от экстремума Z до линии 30%. Цвет — сторона разворота от кончика:
+      // импульс вверх → продажа (жёлтая), импульс вниз → покупка (голубая).
+      const color zfill = (dir > 0) ? C'255,228,150' : C'170,214,240';
       DrawRect(tag + "30Z", t_tip, tip, t30b, p30, ToARGB(zfill, active ? 42 : 20), true, true);
       ObjectSetString(0, tag + "30Z", OBJPROP_TOOLTIP,
-                      (dir > 0) ? "от кончика Z до 30%: РМ на покупку" : "от кончика Z до 30%: РМ на продажу");
+                      (dir > 0) ? "от хая Z до 30%: РМ на продажу" : "от лоя Z до 30%: РМ на покупку");
    }
 }
 
@@ -5636,6 +5645,105 @@ void DrawBasePathDebug(const MqlRates &rates[])
                   "Отладка ShowBasePathDebug: ломаная = события базовых свечей");
 }
 
+void ClearTipReversalMark()
+{
+   ObjectDelete(0, Prefix() + "TIPRM");
+   g_tipRmTime = 0;
+   g_tipRmDir = 0;
+}
+
+// Разворотная свеча на кончике Z. Вверх: медвежья свеча хая — продажа.
+// Вниз: бычья свеча лоя — покупка. Квадрат остаётся на этой свече.
+void MarkTipReversal(const MqlRates &rates[])
+{
+   if(!ShowReversalMoments || !g_zlive_have || g_zlive_dir == 0)
+   {
+      ClearTipReversalMark();
+      return;
+   }
+   const int n = ArraySize(rates);
+   if(n < 5)
+   {
+      ClearTipReversalMark();
+      return;
+   }
+   const int zdir = g_zlive_dir;
+   const double tip = g_zlive_tip;
+   int extreme_i = -1;
+   for(int i = n - 1; i >= 1; i--)
+   {
+      if(rates[i].time < g_zlive_t0)
+         continue;
+      if(extreme_i < 0)
+         extreme_i = i;
+      else if(zdir > 0 && rates[i].high >= rates[extreme_i].high)
+         extreme_i = i;
+      else if(zdir < 0 && rates[i].low <= rates[extreme_i].low)
+         extreme_i = i;
+   }
+   if(extreme_i < 1)
+   {
+      ClearTipReversalMark();
+      return;
+   }
+   int rm_i = -1;
+   if(zdir > 0)
+   {
+      if(rates[extreme_i].close < rates[extreme_i].open)
+         rm_i = extreme_i;
+      else if(rates[extreme_i - 1].close < rates[extreme_i - 1].open)
+         rm_i = extreme_i - 1;
+   }
+   else
+   {
+      if(rates[extreme_i].close > rates[extreme_i].open)
+         rm_i = extreme_i;
+      else if(rates[extreme_i - 1].close > rates[extreme_i - 1].open)
+         rm_i = extreme_i - 1;
+   }
+   if(rm_i < 1)
+   {
+      ClearTipReversalMark();
+      return;
+   }
+   const double tol = MathMax(PointValue() * 10.0, 0.20 * MathAbs(tip - g_zlive_p30));
+   if(zdir > 0 && rates[rm_i].high < tip - tol)
+   {
+      ClearTipReversalMark();
+      return;
+   }
+   if(zdir < 0 && rates[rm_i].low > tip + tol)
+   {
+      ClearTipReversalMark();
+      return;
+   }
+
+   const int trade = -zdir;
+   const int sec = PeriodSeconds(Timeframe);
+   const string name = Prefix() + "TIPRM";
+   const color rm = (trade > 0) ? ColorRM_Buy : ColorRM_Sell;
+   if(!ObjExists(name))
+      ObjectCreate(0, name, OBJ_RECTANGLE, 0, rates[rm_i].time, rates[rm_i].high,
+                   rates[rm_i].time + (datetime)sec, rates[rm_i].low);
+   ObjectMove(0, name, 0, rates[rm_i].time, rates[rm_i].high);
+   ObjectMove(0, name, 1, rates[rm_i].time + (datetime)sec, rates[rm_i].low);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, rm);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, name, OBJPROP_FILL, false);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 30);
+   ObjectSetString(0, name, OBJPROP_TOOLTIP,
+                   (trade < 0) ? "РМ кончик: рассматриваем продажу" : "РМ кончик: рассматриваем покупку");
+   g_tipRmTime = rates[rm_i].time;
+   g_tipRmDir = trade;
+   g_tipRmHigh = rates[rm_i].high;
+   g_tipRmLow = rates[rm_i].low;
+   g_tipRmP30 = g_zlive_p30;
+   g_tipRmTip = tip;
+}
+
 void DrawFib30Line(const MqlRates &rates[])
 {
    // Z / «30»: Снайпер — продолженное с StructureTF (M15), не с рабочего M5.
@@ -5650,6 +5758,7 @@ void DrawFib30Line(const MqlRates &rates[])
       g_fib30_have = false;
       g_fib30_retraced = false;
       DrawModelFibOverlays(rates);
+      ClearTipReversalMark();
       return;
    }
 
@@ -5661,6 +5770,7 @@ void DrawFib30Line(const MqlRates &rates[])
       DeleteObjectsWithPrefix(live);
       g_fib30_have = false;
       DrawModelFibOverlays(rates);
+      ClearTipReversalMark();
       return;
    }
 
@@ -5691,6 +5801,7 @@ void DrawFib30Line(const MqlRates &rates[])
       g_fib30_retraced = false;
       g_fib30_have = false;
       DrawModelFibOverlays(rates);
+      ClearTipReversalMark();
       return;
    }
 
@@ -5744,6 +5855,10 @@ void DrawFib30Line(const MqlRates &rates[])
    if(ObjExists(pfx + "_BAND")) ObjectDelete(0, pfx + "_BAND");
 
    DrawModelFibOverlays(rates);
+   if(!spent && g_zlive_have)
+      MarkTipReversal(rates);
+   else
+      ClearTipReversalMark();
 }
 
 void DrawStructureZone(const SStructureZone &z)
@@ -8246,8 +8361,64 @@ void TryCasc4EntryFromRM(const MqlRates &rates[])
    g_casc4Spent = z.t1;
 }
 
+// Снайпер: РМ на кончике Z рассматривается, когда цена вышла за линию 30%,
+// вернулась в зону и закрылась в сторону этого РМ.
+void TryTipReturnEntry(const MqlRates &rates[])
+{
+   if(!EnableLessonEntries || g_tipRmTime == 0 || g_tipRmDir == 0)
+      return;
+   if(g_tipRmSpent != 0 && g_tipRmSpent == g_tipRmTime)
+      return;
+   const int n = ArraySize(rates);
+   if(n < 4)
+      return;
+
+   int rm_i = -1;
+   for(int i = 1; i < n; i++)
+   {
+      if(rates[i].time == g_tipRmTime)
+      {
+         rm_i = i;
+         break;
+      }
+   }
+   if(rm_i < 2)
+      return;
+
+   const double z_hi = MathMax(g_tipRmTip, g_tipRmP30);
+   const double z_lo = MathMin(g_tipRmTip, g_tipRmP30);
+   bool left = false;
+   bool back = false;
+   for(int i = rm_i - 1; i >= 1; i--)
+   {
+      if(!left)
+      {
+         if(g_tipRmDir < 0 && rates[i].low < z_lo)
+            left = true;
+         else if(g_tipRmDir > 0 && rates[i].high > z_hi)
+            left = true;
+      }
+      else if(rates[i].high >= z_lo && rates[i].low <= z_hi)
+         back = true;
+   }
+   if(!left || !back)
+      return;
+
+   const MqlRates bar = rates[1];
+   if(!(bar.high >= z_lo && bar.low <= z_hi))
+      return;
+   if(g_tipRmDir < 0 && !(bar.close < bar.open))
+      return;
+   if(g_tipRmDir > 0 && !(bar.close > bar.open))
+      return;
+
+   ExecuteSignal("B", g_tipRmDir, bar, z_hi, z_lo, g_expT2Trades);
+   g_tipRmSpent = g_tipRmTime;
+}
+
 void TryLessonStructureEntries(const MqlRates &rates[])
 {
+   TryTipReturnEntry(rates);
    TryPDT1EntryFromRM(rates);
    TryPDT2EntryFromRM(rates);
    TryExpT1EntryFromRM(rates);
@@ -9168,6 +9339,9 @@ int OnInit()
    ResetModelZone(g_modelCascade);
    g_pdT1Trades = 0;
    g_pdT1SpentTip = 0;
+   g_tipRmTime = 0;
+   g_tipRmDir = 0;
+   g_tipRmSpent = 0;
 
    ArrayResize(g_pc_states, 0);
    ArrayResize(g_probHistory, 0);
