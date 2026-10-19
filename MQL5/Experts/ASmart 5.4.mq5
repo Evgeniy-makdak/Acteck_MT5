@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 5.3                                                        |
+//|  ASmart 5.4                                                        |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 5.3 — Z от баланса, который цена закрытием пробила"
-#property version   "5.3"
+#property description "ASmart 5.4 — зона 30% от максимума, Z с основания M15"
+#property version   "5.4"
 
-#define EA_VERSION "5.3"
+#define EA_VERSION "5.4"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart53";
+input string               CommentPrefix        = "ASmart54";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -1865,22 +1865,29 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          if(inside >= min_inside && (seg_hi - seg_lo) >= gap_min)
          {
             const int br = up ? 1 : -1;
-            double tip = up ? seg_hi : seg_lo;
-            datetime ttip = rates[s].time;
-            for(int k = s; k >= 0; k--)
+            // Противоположный пробой сменяет Z только если закрытие снесло опору текущего хода.
+            const bool kill = (best_dir > 0 && dn && rates[s].close < best_origin) ||
+                              (best_dir < 0 && up && rates[s].close > best_origin);
+            if(best_dir == 0 || (br != best_dir && (best_dir == 0 || kill)))
             {
-               if(br > 0 && rates[k].high > tip) { tip = rates[k].high; ttip = rates[k].time; }
-               if(br < 0 && rates[k].low < tip) { tip = rates[k].low; ttip = rates[k].time; }
+               double tip = up ? rates[s].high : rates[s].low;
+               datetime ttip = rates[s].time;
+               for(int k = s; k >= 0; k--)
+               {
+                  if(br > 0 && rates[k].high > tip) { tip = rates[k].high; ttip = rates[k].time; }
+                  if(br < 0 && rates[k].low < tip) { tip = rates[k].low; ttip = rates[k].time; }
+               }
+               // Опора — дно баланса при ходе вверх и вершина при ходе вниз, как диагональ M15 у Снайпера.
+               best_dir = br;
+               best_origin = up ? seg_lo : seg_hi;
+               best_edge = tip;
+               best_rhi = seg_hi;
+               best_rlo = seg_lo;
+               best_ready = seg_t0;
+               best_t = seg_t0;
+               best_tip = tip;
+               best_ttip = ttip;
             }
-            best_dir = br;
-            best_origin = up ? seg_hi : seg_lo;
-            best_edge = up ? seg_lo : seg_hi;
-            best_rhi = seg_hi;
-            best_rlo = seg_lo;
-            best_ready = seg_t0;
-            best_t = rates[s].time;
-            best_tip = tip;
-            best_ttip = ttip;
             seg_hi = rates[s].high;
             seg_lo = rates[s].low;
             seg_t0 = rates[s].time;
@@ -3895,6 +3902,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart51_");
    if(StringFind(Prefix(), "ASmart52_") != 0)
       DeleteObjectsByPrefix("ASmart52_");
+   if(StringFind(Prefix(), "ASmart53_") != 0)
+      DeleteObjectsByPrefix("ASmart53_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5428,11 +5437,11 @@ void DrawZBundle(const string tag, const int dir,
       DrawText(tag + "T", t30b, p30, "30", c30, ANCHOR_LEFT_LOWER);
       ObjectSetInteger(0, tag + "T", OBJPROP_FONTSIZE, active ? 9 : 8);
       ObjectSetString(0, tag + "30", OBJPROP_TOOLTIP, "граница зоны 30%");
-      // Импульс вниз — зона продавца (жёлтая), импульс вверх — зона покупателя (голубая).
-      const color zfill = (dir < 0) ? C'255,228,150' : C'170,214,240';
+      // 30% считается от экстремума хода: у максимума зона продавца, у минимума — покупателя.
+      const color zfill = (dir > 0) ? C'255,228,150' : C'170,214,240';
       DrawRect(tag + "30Z", t_zone, edge, t30b, p30, ToARGB(zfill, active ? 42 : 20), true, true);
       ObjectSetString(0, tag + "30Z", OBJPROP_TOOLTIP,
-                      (dir < 0) ? "зона продавца: возврат и выход вниз" : "зона покупателя: возврат и выход вверх");
+                      (dir > 0) ? "зона продавца: от максимума до 30%" : "зона покупателя: от минимума до 30%");
    }
 }
 
@@ -5744,8 +5753,8 @@ void DrawFib30Line(const MqlRates &rates[])
       return;
    }
 
-   const double zone_edge = (mv.z_org1 != 0.0) ? mv.z_org1 : mv.tip;
-   const double price_30 = zone_edge + (PD_MinCorrectionPct / 100.0) * (mv.origin - zone_edge);
+   const double zone_edge = mv.tip;
+   const double price_30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (mv.origin - mv.tip);
    const double retrace = ContinuedRetracePct(z_rates, mv);
    const bool spent = false;
    mv.retrace_pct = retrace;
