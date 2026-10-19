@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 5.4                                                        |
+//|  ASmart 5.5                                                        |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 5.4 — зона 30% от максимума, Z с основания M15"
-#property version   "5.4"
+#property description "ASmart 5.5 — зона 30% от последней пробитой границы до максимума"
+#property version   "5.5"
 
-#define EA_VERSION "5.4"
+#define EA_VERSION "5.5"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart54";
+input string               CommentPrefix        = "ASmart55";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -1868,7 +1868,7 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
             // Противоположный пробой сменяет Z только если закрытие снесло опору текущего хода.
             const bool kill = (best_dir > 0 && dn && rates[s].close < best_origin) ||
                               (best_dir < 0 && up && rates[s].close > best_origin);
-            if(best_dir == 0 || (br != best_dir && (best_dir == 0 || kill)))
+            if(best_dir == 0 || br == best_dir || kill)
             {
                double tip = up ? rates[s].high : rates[s].low;
                datetime ttip = rates[s].time;
@@ -1877,14 +1877,18 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
                   if(br > 0 && rates[k].high > tip) { tip = rates[k].high; ttip = rates[k].time; }
                   if(br < 0 && rates[k].low < tip) { tip = rates[k].low; ttip = rates[k].time; }
                }
-               // Опора — дно баланса при ходе вверх и вершина при ходе вниз, как диагональ M15 у Снайпера.
-               best_dir = br;
-               best_origin = up ? seg_lo : seg_hi;
-               best_edge = tip;
+               if(best_dir == 0 || kill)
+               {
+                  // Диагональ стартует у основания и дальше в ту же сторону не переезжает.
+                  best_dir = br;
+                  best_origin = up ? seg_lo : seg_hi;
+                  best_t = seg_t0;
+               }
+               // 100% Фибо для зоны 30% — последняя пробитая граница, не старое основание.
+               best_edge = up ? seg_hi : seg_lo;
                best_rhi = seg_hi;
                best_rlo = seg_lo;
                best_ready = seg_t0;
-               best_t = seg_t0;
                best_tip = tip;
                best_ttip = ttip;
             }
@@ -3904,6 +3908,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart52_");
    if(StringFind(Prefix(), "ASmart53_") != 0)
       DeleteObjectsByPrefix("ASmart53_");
+   if(StringFind(Prefix(), "ASmart54_") != 0)
+      DeleteObjectsByPrefix("ASmart54_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5753,8 +5759,9 @@ void DrawFib30Line(const MqlRates &rates[])
       return;
    }
 
+   const double fib100 = (mv.z_org1 != 0.0) ? mv.z_org1 : mv.origin;
    const double zone_edge = mv.tip;
-   const double price_30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (mv.origin - mv.tip);
+   const double price_30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (fib100 - mv.tip);
    const double retrace = ContinuedRetracePct(z_rates, mv);
    const bool spent = false;
    mv.retrace_pct = retrace;
