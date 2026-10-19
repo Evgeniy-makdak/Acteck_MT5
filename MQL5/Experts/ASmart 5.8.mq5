@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 5.7                                                        |
+//|  ASmart 5.8                                                        |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 5.7 — зона 30% у начала хода, Z от лоу первой точки"
-#property version   "5.7"
+#property description "ASmart 5.8 — Z с пробоя верхней КЗ диапазона ликвидности"
+#property version   "5.8"
 
-#define EA_VERSION "5.7"
+#define EA_VERSION "5.8"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart57";
+input string               CommentPrefix        = "ASmart58";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -1839,143 +1839,61 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(nr < 40)
       return false;
 
-   // Z — последний безоткатный ход на M15. Опора переносится только после отката
-   // не меньше порога. Короткая пауза внутри хода и старый минимум нескольких дней опору не двигают.
+   // Диапазон ликвидности между двумя КЗ. Z начинается в цене пробитой границы,
+   // а не в минимуме диапазона. Продолжение хода опору не переносит.
    const int look = MathMin(nr - 2, MathMax(80, StructureLookbackBars));
    if(look < 12)
       return false;
    const double gap_min = 20.0 * PointValue();
-   // Порог выше короткой паузы: более высокий лоу внутри хода опору не переносит.
-   double min_rev = rates[look].close * 0.0010;
-   if(min_rev < 120.0 * PointValue())
-      min_rev = 120.0 * PointValue();
+   double range_min = rates[look].close * 0.0007;
+   if(range_min < 100.0 * PointValue())
+      range_min = 100.0 * PointValue();
+   const int min_inside = 4;
 
-   int best_dir = 1;
-   double best_base = rates[look].low;
-   double best_origin = rates[look].low;
-   double best_tip = rates[look].high;
-   double best_rhi = rates[look].high;
-   double best_rlo = rates[look].low;
-   datetime best_t = rates[look].time;
-   datetime best_ttip = rates[look].time;
-   datetime best_ready = rates[look].time;
-   bool pulling = false;
-   double pb_px = 0.0;
-   datetime pb_t = 0;
+   int best_dir = 0;
+   double best_base = 0.0, best_origin = 0.0, best_tip = 0.0, best_rhi = 0.0, best_rlo = 0.0;
+   datetime best_t = 0, best_ttip = 0, best_ready = 0;
+
+   double seg_hi = rates[look].high;
+   double seg_lo = rates[look].low;
+   datetime seg_t0 = rates[look].time;
+   int inside = 1;
 
    for(int s = look - 1; s >= 0; s--)
    {
-      const double hi = rates[s].high;
-      const double lo = rates[s].low;
-      const datetime tm = rates[s].time;
-      if(best_dir > 0)
+      const bool up = (rates[s].close > seg_hi);
+      const bool dn = (rates[s].close < seg_lo);
+      if(!up && !dn)
       {
-         if(!pulling)
-         {
-            if(hi >= best_tip)
-            {
-               best_tip = hi;
-               best_ttip = tm;
-            }
-            const double leg = best_tip - best_origin;
-            const double retr = best_tip - lo;
-            const double need = MathMax(min_rev, 0.30 * leg);
-            if(leg >= min_rev && retr >= need)
-            {
-               pulling = true;
-               pb_px = lo;
-               pb_t = tm;
-            }
-         }
-         else
-         {
-            if(lo <= pb_px)
-            {
-               pb_px = lo;
-               pb_t = tm;
-            }
-            if(hi - pb_px >= min_rev)
-            {
-               if(MathAbs(best_origin - pb_px) >= gap_min)
-                  best_base = best_origin;
-               best_origin = pb_px;
-               best_t = pb_t;
-               best_rlo = pb_px;
-               best_rhi = hi;
-               best_ready = pb_t;
-               best_tip = hi;
-               best_ttip = tm;
-               pulling = false;
-            }
-            else if(lo < best_origin && (best_origin - lo) >= min_rev)
-            {
-               best_dir = -1;
-               best_base = best_tip;
-               best_origin = best_tip;
-               best_t = best_ttip;
-               best_rhi = best_tip;
-               best_rlo = lo;
-               best_ready = best_ttip;
-               best_tip = lo;
-               best_ttip = tm;
-               pulling = false;
-            }
-         }
+         if(rates[s].high > seg_hi) seg_hi = rates[s].high;
+         if(rates[s].low < seg_lo) seg_lo = rates[s].low;
+         inside++;
+         continue;
       }
-      else
+      if(inside >= min_inside && (seg_hi - seg_lo) >= range_min)
       {
-         if(!pulling)
+         const int br = up ? 1 : -1;
+         double tip = up ? rates[s].high : rates[s].low;
+         datetime ttip = rates[s].time;
+         for(int k = s; k >= 0; k--)
          {
-            if(lo <= best_tip)
-            {
-               best_tip = lo;
-               best_ttip = tm;
-            }
-            const double leg = best_origin - best_tip;
-            const double retr = hi - best_tip;
-            const double need = MathMax(min_rev, 0.30 * leg);
-            if(leg >= min_rev && retr >= need)
-            {
-               pulling = true;
-               pb_px = hi;
-               pb_t = tm;
-            }
+            if(br > 0 && rates[k].high > tip) { tip = rates[k].high; ttip = rates[k].time; }
+            if(br < 0 && rates[k].low < tip) { tip = rates[k].low; ttip = rates[k].time; }
          }
-         else
-         {
-            if(hi >= pb_px)
-            {
-               pb_px = hi;
-               pb_t = tm;
-            }
-            if(pb_px - lo >= min_rev)
-            {
-               if(MathAbs(best_origin - pb_px) >= gap_min)
-                  best_base = best_origin;
-               best_origin = pb_px;
-               best_t = pb_t;
-               best_rhi = pb_px;
-               best_rlo = lo;
-               best_ready = pb_t;
-               best_tip = lo;
-               best_ttip = tm;
-               pulling = false;
-            }
-            else if(hi > best_origin && (hi - best_origin) >= min_rev)
-            {
-               best_dir = 1;
-               best_base = best_tip;
-               best_origin = best_tip;
-               best_t = best_ttip;
-               best_rlo = best_tip;
-               best_rhi = hi;
-               best_ready = best_ttip;
-               best_tip = hi;
-               best_ttip = tm;
-               pulling = false;
-            }
-         }
+         best_dir = br;
+         best_base = up ? seg_lo : seg_hi;
+         best_origin = up ? seg_hi : seg_lo;
+         best_t = rates[s].time;
+         best_rhi = seg_hi;
+         best_rlo = seg_lo;
+         best_ready = seg_t0;
+         best_tip = tip;
+         best_ttip = ttip;
       }
+      seg_hi = rates[s].high;
+      seg_lo = rates[s].low;
+      seg_t0 = rates[s].time;
+      inside = 0;
    }
    const double range = MathAbs(best_tip - best_origin);
    if(range < gap_min || best_t == 0)
@@ -3982,6 +3900,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart55_");
    if(StringFind(Prefix(), "ASmart56_") != 0)
       DeleteObjectsByPrefix("ASmart56_");
+   if(StringFind(Prefix(), "ASmart57_") != 0)
+      DeleteObjectsByPrefix("ASmart57_");
    Comment("");
    ChartRedraw(0);
 }
