@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 5.5                                                        |
+//|  ASmart 5.6                                                        |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 5.5 — зона 30% от последней пробитой границы до максимума"
-#property version   "5.5"
+#property description "ASmart 5.6 — Z от последней коррекции безоткатного хода на M15"
+#property version   "5.6"
 
-#define EA_VERSION "5.5"
+#define EA_VERSION "5.6"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart55";
+input string               CommentPrefix        = "ASmart56";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -1839,77 +1839,137 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(nr < 40)
       return false;
 
-   // Диапазон копится, пока цена закрывается внутри. Первое закрытие за границей —
-   // опора Z. Следующие свечи в ту же сторону опору не переносят: ход безоткатный.
+   // Z — последний безоткатный ход на M15. Опора переносится только после отката
+   // не меньше порога. Короткая пауза внутри хода и старый минимум нескольких дней опору не двигают.
    const int look = MathMin(nr - 2, MathMax(80, StructureLookbackBars));
    if(look < 12)
       return false;
    const double gap_min = 20.0 * PointValue();
-   const int min_inside = 3;
+   double min_rev = rates[look].close * 0.0006;
+   if(min_rev < 80.0 * PointValue())
+      min_rev = 80.0 * PointValue();
 
-   int best_dir = 0;
-   double best_origin = 0.0, best_tip = 0.0, best_edge = 0.0, best_rhi = 0.0, best_rlo = 0.0;
-   datetime best_t = 0, best_ttip = 0, best_ready = 0;
+   int best_dir = 1;
+   double best_origin = rates[look].low;
+   double best_tip = rates[look].high;
+   double best_rhi = rates[look].high;
+   double best_rlo = rates[look].low;
+   datetime best_t = rates[look].time;
+   datetime best_ttip = rates[look].time;
+   datetime best_ready = rates[look].time;
+   bool pulling = false;
+   double pb_px = 0.0;
+   datetime pb_t = 0;
 
-   double seg_hi = rates[look].high;
-   double seg_lo = rates[look].low;
-   datetime seg_t0 = rates[look].time;
-   int inside = 1;
-
-   for(int s = look - 1; s >= 1; s--)
+   for(int s = look - 1; s >= 0; s--)
    {
-      const bool up = (rates[s].close > seg_hi);
-      const bool dn = (rates[s].close < seg_lo);
-      if(up || dn)
+      const double hi = rates[s].high;
+      const double lo = rates[s].low;
+      const datetime tm = rates[s].time;
+      if(best_dir > 0)
       {
-         if(inside >= min_inside && (seg_hi - seg_lo) >= gap_min)
+         if(!pulling)
          {
-            const int br = up ? 1 : -1;
-            // Противоположный пробой сменяет Z только если закрытие снесло опору текущего хода.
-            const bool kill = (best_dir > 0 && dn && rates[s].close < best_origin) ||
-                              (best_dir < 0 && up && rates[s].close > best_origin);
-            if(best_dir == 0 || br == best_dir || kill)
+            if(hi >= best_tip)
             {
-               double tip = up ? rates[s].high : rates[s].low;
-               datetime ttip = rates[s].time;
-               for(int k = s; k >= 0; k--)
-               {
-                  if(br > 0 && rates[k].high > tip) { tip = rates[k].high; ttip = rates[k].time; }
-                  if(br < 0 && rates[k].low < tip) { tip = rates[k].low; ttip = rates[k].time; }
-               }
-               if(best_dir == 0 || kill)
-               {
-                  // Диагональ стартует у основания и дальше в ту же сторону не переезжает.
-                  best_dir = br;
-                  best_origin = up ? seg_lo : seg_hi;
-                  best_t = seg_t0;
-               }
-               // 100% Фибо для зоны 30% — последняя пробитая граница, не старое основание.
-               best_edge = up ? seg_hi : seg_lo;
-               best_rhi = seg_hi;
-               best_rlo = seg_lo;
-               best_ready = seg_t0;
-               best_tip = tip;
-               best_ttip = ttip;
+               best_tip = hi;
+               best_ttip = tm;
             }
-            seg_hi = rates[s].high;
-            seg_lo = rates[s].low;
-            seg_t0 = rates[s].time;
-            inside = 0;
+            const double leg = best_tip - best_origin;
+            const double retr = best_tip - lo;
+            const double need = MathMax(min_rev, 0.30 * leg);
+            if(leg >= min_rev && retr >= need)
+            {
+               pulling = true;
+               pb_px = lo;
+               pb_t = tm;
+            }
          }
          else
          {
-            if(rates[s].high > seg_hi) seg_hi = rates[s].high;
-            if(rates[s].low < seg_lo) seg_lo = rates[s].low;
-            inside = 0;
+            if(lo <= pb_px)
+            {
+               pb_px = lo;
+               pb_t = tm;
+            }
+            if(hi - pb_px >= min_rev)
+            {
+               best_origin = pb_px;
+               best_t = pb_t;
+               best_rlo = pb_px;
+               best_rhi = hi;
+               best_ready = pb_t;
+               best_tip = hi;
+               best_ttip = tm;
+               pulling = false;
+            }
+            else if(lo < best_origin && (best_origin - lo) >= min_rev)
+            {
+               best_dir = -1;
+               best_origin = best_tip;
+               best_t = best_ttip;
+               best_rhi = best_tip;
+               best_rlo = lo;
+               best_ready = best_ttip;
+               best_tip = lo;
+               best_ttip = tm;
+               pulling = false;
+            }
          }
-         continue;
       }
-      inside++;
+      else
+      {
+         if(!pulling)
+         {
+            if(lo <= best_tip)
+            {
+               best_tip = lo;
+               best_ttip = tm;
+            }
+            const double leg = best_origin - best_tip;
+            const double retr = hi - best_tip;
+            const double need = MathMax(min_rev, 0.30 * leg);
+            if(leg >= min_rev && retr >= need)
+            {
+               pulling = true;
+               pb_px = hi;
+               pb_t = tm;
+            }
+         }
+         else
+         {
+            if(hi >= pb_px)
+            {
+               pb_px = hi;
+               pb_t = tm;
+            }
+            if(pb_px - lo >= min_rev)
+            {
+               best_origin = pb_px;
+               best_t = pb_t;
+               best_rhi = pb_px;
+               best_rlo = lo;
+               best_ready = pb_t;
+               best_tip = lo;
+               best_ttip = tm;
+               pulling = false;
+            }
+            else if(hi > best_origin && (hi - best_origin) >= min_rev)
+            {
+               best_dir = 1;
+               best_origin = best_tip;
+               best_t = best_ttip;
+               best_rlo = best_tip;
+               best_rhi = hi;
+               best_ready = best_ttip;
+               best_tip = hi;
+               best_ttip = tm;
+               pulling = false;
+            }
+         }
+      }
    }
-   if(best_dir == 0)
-      return false;
-   const double range = MathAbs(best_edge - best_origin);
+   const double range = MathAbs(best_tip - best_origin);
    if(range < gap_min || best_t == 0)
       return false;
 
@@ -1923,7 +1983,7 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(m.i_tip < 0)
       m.i_tip = 1;
    m.range = range;
-   m.z_org1 = best_edge;
+   m.z_org1 = best_origin;
    m.z_tip1 = best_rhi;
    m.z_corr = best_rlo;
    m.z_t_org1 = best_ready;
@@ -3910,6 +3970,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart53_");
    if(StringFind(Prefix(), "ASmart54_") != 0)
       DeleteObjectsByPrefix("ASmart54_");
+   if(StringFind(Prefix(), "ASmart55_") != 0)
+      DeleteObjectsByPrefix("ASmart55_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5759,9 +5821,8 @@ void DrawFib30Line(const MqlRates &rates[])
       return;
    }
 
-   const double fib100 = (mv.z_org1 != 0.0) ? mv.z_org1 : mv.origin;
    const double zone_edge = mv.tip;
-   const double price_30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (fib100 - mv.tip);
+   const double price_30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (mv.origin - mv.tip);
    const double retrace = ContinuedRetracePct(z_rates, mv);
    const bool spent = false;
    mv.retrace_pct = retrace;
