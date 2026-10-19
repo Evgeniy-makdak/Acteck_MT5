@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.29                                                       |
+//|  ASmart 4.30                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.29 — Z от базы импульса, как у Снайпера"
-#property version   "4.29"
+#property description "ASmart 4.30 — расширение в сторону последнего пробоя, зона 30%"
+#property version   "4.30"
 
-#define EA_VERSION "4.29"
+#define EA_VERSION "4.30"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart429";
+input string               CommentPrefix        = "ASmart430";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -3950,6 +3950,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart427_");
    if(StringFind(Prefix(), "ASmart428_") != 0)
       DeleteObjectsByPrefix("ASmart428_");
+   if(StringFind(Prefix(), "ASmart429_") != 0)
+      DeleteObjectsByPrefix("ASmart429_");
    Comment("");
    ChartRedraw(0);
 }
@@ -4328,7 +4330,6 @@ void UpdateLiquidityZones(const MqlRates &rates[])
    // и RGB-прицел на M5. Паттерны/свинги по-прежнему берут EffectiveSwingDepth().
    const int depth = MathMax(2, LiqPivotDepth);
    const int look = MathMin(ArraySize(rates) - depth - 2, MathMax(50, LiqLookbackBars));
-   const double zh = MathMax(PointValue() * 5.0, LiqZoneATR_Mult * atr);
    const double tol = MathMax(PointValue() * 3.0, 0.15 * atr);
 
    SLiquidityZone tmp[];
@@ -4361,9 +4362,10 @@ void UpdateLiquidityZones(const MqlRates &rates[])
          tmp[n].active = true;
          tmp[n].type = 1;
          tmp[n].t1 = rates[shift].time;
-         tmp[n].t2 = rates[0].time + (datetime)(PeriodSeconds(Timeframe) * 20);
-         tmp[n].high = level + zh * 0.25;
-         tmp[n].low = level - zh;
+         tmp[n].t2 = rates[shift].time + (datetime)(PeriodSeconds(Timeframe) * 14);
+         const double body = MathMax(rates[shift].open, rates[shift].close);
+         tmp[n].high = body;
+         tmp[n].low = body;
          tmp[n].id = ++g_liqSeq;
       }
 
@@ -4389,9 +4391,10 @@ void UpdateLiquidityZones(const MqlRates &rates[])
          tmp[n].active = true;
          tmp[n].type = -1;
          tmp[n].t1 = rates[shift].time;
-         tmp[n].t2 = rates[0].time + (datetime)(PeriodSeconds(Timeframe) * 20);
-         tmp[n].high = level + zh;
-         tmp[n].low = level - zh * 0.25;
+         tmp[n].t2 = rates[shift].time + (datetime)(PeriodSeconds(Timeframe) * 14);
+         const double body = MathMin(rates[shift].open, rates[shift].close);
+         tmp[n].high = body;
+         tmp[n].low = body;
          tmp[n].id = ++g_liqSeq;
       }
    }
@@ -4422,29 +4425,19 @@ void UpdateLiquidityZones(const MqlRates &rates[])
          continue;
       color base = (tmp[i].type > 0) ? ColorSupplyZone : ColorDemandZone;
       string name = Prefix() + "LIQ_" + IntegerToString(tmp[i].id);
-      if(ink >= 0.45)
-      {
-         int a0 = LiqZoneFillAlpha;
-         if(a0 < 8) a0 = 8;
-         if(a0 > 80) a0 = 80;
-         color fill = ToARGB(base, (int)(a0 * ink));
-         DrawRect(name, tmp[i].t1, tmp[i].high, tmp[i].t2, tmp[i].low, fill, true, true);
-         string lbl = (tmp[i].type > 0) ? "Предложение" : "Спрос";
-         color lc = InkColor((tmp[i].type > 0) ? ColorSupplyLabel : ColorDemandLabel, ink);
-         DrawText(name + "_T", tmp[i].t1, (tmp[i].type > 0) ? tmp[i].high : tmp[i].low,
-                  lbl, lc, (tmp[i].type > 0) ? ANCHOR_LEFT_LOWER : ANCHOR_LEFT_UPPER);
-      }
-      else
-      {
-         ObjectCreate(0, name, OBJ_RECTANGLE, 0, tmp[i].t1, tmp[i].high, tmp[i].t2, tmp[i].low);
-         ObjectSetInteger(0, name, OBJPROP_COLOR, InkColor(base, ink));
-         ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_DOT);
-         ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
-         ObjectSetInteger(0, name, OBJPROP_FILL, false);
-         ObjectSetInteger(0, name, OBJPROP_BACK, true);
-         ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-         if(ObjExists(name + "_T")) ObjectDelete(0, name + "_T");
-      }
+      if(ObjExists(name))
+         ObjectDelete(0, name);
+      if(ObjExists(name + "_T"))
+         ObjectDelete(0, name + "_T");
+      if(ink < 0.45)
+         continue;
+      const double px = tmp[i].high;
+      DrawHLineSegment(name, tmp[i].t1, tmp[i].t2, px, InkColor(base, ink), STYLE_DOT, 1, "");
+      string lbl = (tmp[i].type > 0) ? "Предложение" : "Спрос";
+      color lc = InkColor((tmp[i].type > 0) ? ColorSupplyLabel : ColorDemandLabel, ink);
+      DrawText(name + "_T", tmp[i].t2, px, lbl, lc,
+               (tmp[i].type > 0) ? ANCHOR_LEFT_LOWER : ANCHOR_LEFT_UPPER);
+      ObjectSetInteger(0, name + "_T", OBJPROP_FONTSIZE, 7);
    }
 }
 
@@ -5493,6 +5486,14 @@ void DrawZBundle(const string tag, const int dir,
       ObjectSetInteger(0, tag + "T", OBJPROP_FONTSIZE, active ? 9 : 8);
       ObjectSetString(0, tag + "30", OBJPROP_TOOLTIP,
                       active ? "30% актуально" : "30% неактуально: коррекция ≥50%");
+      // Зона отката 30%: прямоугольник со слабой заливкой.
+      // Покупка (последний импульс вверх) — голубая, продажа — жёлтая.
+      const double rng = MathAbs(tip - origin);
+      const double band = MathMax(PointValue() * 6.0, 0.07 * rng);
+      const color zfill = (dir > 0) ? C'170,214,240' : C'255,228,150';
+      DrawRect(tag + "30Z", t_tip, p30 + band, t30b, p30 - band, ToARGB(zfill, active ? 42 : 20), true, true);
+      ObjectSetString(0, tag + "30Z", OBJPROP_TOOLTIP,
+                      (dir > 0) ? "30% откат: ищем РМ на покупку" : "30% откат: ищем РМ на продажу");
    }
 }
 
@@ -5858,10 +5859,18 @@ void DrawStructureZone(const SStructureZone &z)
       fill_c = clrDarkGray;
    color edge = InkColor(fill_c, ink);
 
-   // Зона: по умолчанию ТОЛЬКО контур (без заливки) — иначе коричневое «пятно» перекрывает график
-   if(ShowZoneFill && ink >= 0.45)
+   // Зона решения расширения всегда со слабой заливкой: голубая покупка, жёлтая продажа.
+   const bool soft_zu = (z.kind == SK_ZU && z.valid && ink >= 0.45);
+   if((ShowZoneFill && ink >= 0.45) || soft_zu)
    {
-      color fill = ToARGB(fill_c, (int)(((z.kind == SK_RM) ? 25 : (z.valid ? 28 : 18)) * ink));
+      color paint = fill_c;
+      int alpha = (int)(((z.kind == SK_RM) ? 25 : (z.valid ? 28 : 18)) * ink);
+      if(soft_zu)
+      {
+         paint = (z.direction > 0) ? C'170,214,240' : C'255,228,150';
+         alpha = 46;
+      }
+      color fill = ToARGB(paint, alpha);
       DrawRect(base + "_BOX", z.t1, z.high, z.t2, z.low, fill, true, true);
       ObjectSetInteger(0, base + "_BOX", OBJPROP_ZORDER, 1);
    }
@@ -6844,17 +6853,16 @@ void DetectPattern_Expansions(const MqlRates &rates[], const SPivot &swings[], c
       }
       if(liq)
       {
-         double zh = MathMax(PointValue() * 8.0,
-                             (atr > 0.0 ? MathMax(0.25, Exp2_ImbalanceATR) * atr : mv.range * 0.12));
-         double z_hi, z_lo;
-         int entry_dir = (mv.dir > 0) ? -1 : 1; // реакция от дисбаланса на tip
-         if(mv.dir > 0) { z_hi = sweep_ext; z_lo = sweep_ext - zh; }
-         else           { z_lo = sweep_ext; z_hi = sweep_ext + zh; }
-         string lab = StringFormat("%s %s дисбал.", PatternName(PAT_EXP_T2), (entry_dir>0?"BUY":"SELL"));
+         // Вход в сторону последнего импульса (продолженного), не против него.
+         // Зона — откат 30% этого хода: голубая покупка / жёлтая продажа.
+         const int entry_dir = mv.dir;
+         const double p30 = mv.tip + (ZU_SizePctOfMove / 100.0) * (mv.origin - mv.tip);
+         const double half = MathMax(PointValue() * 6.0, 0.07 * mv.range);
+         string lab = StringFormat("%s %s ЗУ30", PatternName(PAT_EXP_T2), (entry_dir>0?"BUY":"SELL"));
          PushStructureZoneEx(SK_ZU, PAT_EXP_T2, entry_dir, mv.t_tip,
                              now_t + (datetime)(sec * MathMax(30, SightBarsWidth)),
-                             z_hi, z_lo, mv.range, 0.0, lab, true, tf_tag,
-                             mv.origin, sweep_ext);
+                             p30 + half, p30 - half, mv.range, ZU_SizePctOfMove, lab, true, tf_tag,
+                             mv.origin, mv.tip);
       }
    }
 
@@ -6909,17 +6917,18 @@ void DetectPattern_Expansions(const MqlRates &rates[], const SPivot &swings[], c
       }
       if(!(swept_high && swept_low)) continue; // пробой в обе стороны = расширение
 
-      int dir = (t_sweep_h >= t_sweep_l) ? 1 : -1; // последний пробой
+      int dir = (t_sweep_h >= t_sweep_l) ? 1 : -1; // последний пробой — сторона сделки
       datetime t_last = (dir > 0) ? t_sweep_h : t_sweep_l;
       double beyond = (dir > 0) ? max_beyond_h : max_beyond_l;
-      double break_move = beyond; // ход, которым пробита последняя КЗ
+      double break_move = beyond;
       if(break_move <= PointValue()) break_move = X * 0.3;
-      // ЗУ = ZU_SizePctOfMove% от пробойного хода, якорь у границы пробоя
-      double zu_size = MathMax(PointValue() * 8.0, (ZU_SizePctOfMove / 100.0) * break_move);
-      double edge = (dir > 0) ? range_hi : range_lo;
-      double z_hi, z_lo;
-      if(dir > 0) { z_lo = edge; z_hi = edge + zu_size; }
-      else        { z_hi = edge; z_lo = edge - zu_size; }
+      // Зона входа — откат 30% последнего пробойного импульса, не область над пробоем.
+      const double impulse_tip = (dir > 0) ? (range_hi + beyond) : (range_lo - beyond);
+      const double impulse_base = (dir > 0) ? range_hi : range_lo;
+      const double p30 = impulse_tip + (ZU_SizePctOfMove / 100.0) * (impulse_base - impulse_tip);
+      const double half = MathMax(PointValue() * 6.0, 0.07 * MathAbs(impulse_tip - impulse_base));
+      const double z_hi = p30 + half;
+      const double z_lo = p30 - half;
 
       double beyond_pct = (X > 0) ? (100.0 * beyond / X) : 0.0;
       bool valid = !(CascadeMaxBreakoutPct > 0.0 && beyond_pct > CascadeMaxBreakoutPct);
@@ -8123,7 +8132,7 @@ void TryExpT1EntryFromRM(const MqlRates &rates[])
    for(int i = ArraySize(g_structZones) - 1; i >= 0; i--)
    {
       if(!g_structZones[i].valid) continue;
-      if(g_structZones[i].pattern != PAT_EXP_T1) continue;
+      if(g_structZones[i].pattern != PAT_EXP_T1 && g_structZones[i].pattern != PAT_EXP_THROUGH_LP) continue;
       zi = i; break;
    }
    if(zi < 0) return;
