@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 5.2                                                        |
+//|  ASmart 5.3                                                        |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 5.2 — Z с пробоя одной границы КЗ"
-#property version   "5.2"
+#property description "ASmart 5.3 — Z от баланса, который цена закрытием пробила"
+#property version   "5.3"
 
-#define EA_VERSION "5.2"
+#define EA_VERSION "5.3"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart52";
+input string               CommentPrefix        = "ASmart53";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -1839,94 +1839,62 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(nr < 40)
       return false;
 
-   // Z начинается в пробое диапазона двух КЗ после съёма ликвидности с обеих сторон.
-   // Опора — цена пробитой КЗ. Противоположный экстремум — внешняя граница зоны 30%.
-   double lv[];
-   datetime kt[];
-   int kd[];
-   ArrayResize(lv, 0);
-   ArrayResize(kt, 0);
-   ArrayResize(kd, 0);
-   for(int zi = 0; zi < ArraySize(g_structZones); zi++)
-   {
-      if(g_structZones[zi].kind != SK_KZ || !g_structZones[zi].valid)
-         continue;
-      if(StringLen(g_structZones[zi].tf_tag) > 0 && g_structZones[zi].tf_tag != StructureTFTag())
-         continue;
-      const double lvl = g_structZones[zi].imp_start;
-      if(lvl == 0.0)
-         continue;
-      const int n = ArraySize(lv);
-      ArrayResize(lv, n + 1);
-      ArrayResize(kt, n + 1);
-      ArrayResize(kd, n + 1);
-      lv[n] = lvl;
-      kt[n] = g_structZones[zi].t1;
-      kd[n] = g_structZones[zi].direction;
-   }
-   const int nk = ArraySize(lv);
-   if(nk < 2)
+   // Диапазон копится, пока цена закрывается внутри. Первое закрытие за границей —
+   // опора Z. Следующие свечи в ту же сторону опору не переносят: ход безоткатный.
+   const int look = MathMin(nr - 2, MathMax(80, StructureLookbackBars));
+   if(look < 12)
       return false;
+   const double gap_min = 20.0 * PointValue();
+   const int min_inside = 3;
 
    int best_dir = 0;
-   double best_origin = 0.0, best_tip = 0.0, best_edge = 0.0;
-   double best_rhi = 0.0, best_rlo = 0.0;
+   double best_origin = 0.0, best_tip = 0.0, best_edge = 0.0, best_rhi = 0.0, best_rlo = 0.0;
    datetime best_t = 0, best_ttip = 0, best_ready = 0;
-   const double gap_min = 20.0 * PointValue();
 
-   for(int i = 0; i < nk; i++)
+   double seg_hi = rates[look].high;
+   double seg_lo = rates[look].low;
+   datetime seg_t0 = rates[look].time;
+   int inside = 1;
+
+   for(int s = look - 1; s >= 1; s--)
    {
-      if(kd[i] <= 0)
-         continue;
-      for(int j = 0; j < nk; j++)
+      const bool up = (rates[s].close > seg_hi);
+      const bool dn = (rates[s].close < seg_lo);
+      if(up || dn)
       {
-         if(kd[j] >= 0)
-            continue;
-         if(lv[j] <= lv[i] + gap_min)
-            continue;
-         const datetime ready = (kt[i] > kt[j]) ? kt[i] : kt[j];
-         double hi = lv[j];
-         double lo = lv[i];
-         int br = 0;
-         datetime tb = 0;
-         double edge = 0.0;
-         // Безоткатное Z: обе КЗ уже есть, первое закрытие за одной из них — опора.
-         for(int s = nr - 1; s >= 1; s--)
+         if(inside >= min_inside && (seg_hi - seg_lo) >= gap_min)
          {
-            if(rates[s].time < ready)
-               continue;
-            if(rates[s].high > hi) hi = rates[s].high;
-            if(rates[s].low < lo) lo = rates[s].low;
-            if(rates[s].close > lv[j])
-            { br = 1; tb = rates[s].time; edge = lo; break; }
-            if(rates[s].close < lv[i])
-            { br = -1; tb = rates[s].time; edge = hi; break; }
-         }
-         if(br == 0 || tb <= best_t)
-            continue;
-         double tip = (br < 0) ? lv[i] : lv[j];
-         datetime ttip = tb;
-         const int ib = RateIndexAtTime(rates, tb);
-         if(ib >= 0)
-         {
-            for(int s = ib; s >= 0; s--)
+            const int br = up ? 1 : -1;
+            double tip = up ? seg_hi : seg_lo;
+            datetime ttip = rates[s].time;
+            for(int k = s; k >= 0; k--)
             {
-               if(br < 0 && rates[s].low < tip)
-               { tip = rates[s].low; ttip = rates[s].time; }
-               if(br > 0 && rates[s].high > tip)
-               { tip = rates[s].high; ttip = rates[s].time; }
+               if(br > 0 && rates[k].high > tip) { tip = rates[k].high; ttip = rates[k].time; }
+               if(br < 0 && rates[k].low < tip) { tip = rates[k].low; ttip = rates[k].time; }
             }
+            best_dir = br;
+            best_origin = up ? seg_hi : seg_lo;
+            best_edge = up ? seg_lo : seg_hi;
+            best_rhi = seg_hi;
+            best_rlo = seg_lo;
+            best_ready = seg_t0;
+            best_t = rates[s].time;
+            best_tip = tip;
+            best_ttip = ttip;
+            seg_hi = rates[s].high;
+            seg_lo = rates[s].low;
+            seg_t0 = rates[s].time;
+            inside = 0;
          }
-         best_dir = br;
-         best_origin = (br < 0) ? lv[i] : lv[j];
-         best_tip = tip;
-         best_edge = edge;
-         best_rhi = lv[j];
-         best_rlo = lv[i];
-         best_ready = ready;
-         best_t = tb;
-         best_ttip = ttip;
+         else
+         {
+            if(rates[s].high > seg_hi) seg_hi = rates[s].high;
+            if(rates[s].low < seg_lo) seg_lo = rates[s].low;
+            inside = 0;
+         }
+         continue;
       }
+      inside++;
    }
    if(best_dir == 0)
       return false;
@@ -3925,6 +3893,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart50_");
    if(StringFind(Prefix(), "ASmart51_") != 0)
       DeleteObjectsByPrefix("ASmart51_");
+   if(StringFind(Prefix(), "ASmart52_") != 0)
+      DeleteObjectsByPrefix("ASmart52_");
    Comment("");
    ChartRedraw(0);
 }
