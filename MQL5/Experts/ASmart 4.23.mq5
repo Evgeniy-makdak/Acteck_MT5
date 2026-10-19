@@ -1740,8 +1740,17 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    return true;
 }
 
-// Графический Z как у Снайпера: плечо с M15 до живого экстремума,
-// не дожидаясь фрактала на кончике (на M5 линия уже видна).
+int RateIndexAtTime(const MqlRates &rates[], const datetime t)
+{
+   const int nr = ArraySize(rates);
+   for(int i = 0; i < nr; i++)
+      if(rates[i].time == t)
+         return i;
+   return -1;
+}
+
+// Графический Z как у Снайпера: ОДНО последнее плечо зигзага на M15.
+// Кончик дотягивается до живого экстремума. Старые хаи (другое плечо) не склеиваются.
 bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
 {
    m.valid = false;
@@ -1769,85 +1778,91 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       return false;
 
    double atr = 0.0;
-   const int ap = 14;
    int ac = 0;
-   for(int i = 1; i <= ap && i < nr; i++)
+   for(int i = 1; i <= 14 && i < nr; i++)
    {
       atr += MathMax(rates[i].high, rates[i - 1].close) - MathMin(rates[i].low, rates[i - 1].close);
       ac++;
    }
-   if(ac > 0) atr /= (double)ac;
-   double min_need = (atr > 0.0) ? MathMax(20.0 * PointValue(), 0.55 * atr) : MinContinuedMoveRange();
+   if(ac > 0)
+      atr /= (double)ac;
+   const double min_need = (atr > 0.0) ? MathMax(20.0 * PointValue(), 0.45 * atr) : (30.0 * PointValue());
 
-   int best_dir = 0;
-   double best_origin = 0.0, best_tip = 0.0;
-   datetime best_to = 0, best_tt = 0;
-   int best_it = 1;
+   const int i_last = RateIndexAtTime(rates, swings[ns - 1].t);
+   const int i_prev = RateIndexAtTime(rates, swings[ns - 2].t);
+   if(i_last < 0 || i_prev < 0 || swings[ns - 1].type == swings[ns - 2].type)
+      return false;
 
-   for(int s = ns - 1; s >= 1 && s >= ns - 6; s--)
+   int dir = 0;
+   double origin = 0.0, tip = 0.0;
+   datetime t_origin = 0, t_tip = 0;
+   int i_tip = i_last;
+
+   if(swings[ns - 1].type > 0)
    {
-      int i_sw = -1;
-      for(int r = 0; r < nr; r++)
+      // Последний подтверждённый свинг — хай. Если от него уже ушли вниз, Z = этот хай → живой лой.
+      double lo = swings[ns - 1].p;
+      int ilo = i_last;
+      for(int i = 0; i <= i_last; i++)
       {
-         if(rates[r].time == swings[s].t)
-         { i_sw = r; break; }
+         if(rates[i].low < lo)
+         { lo = rates[i].low; ilo = i; }
       }
-      if(i_sw < 0)
-         continue;
-
-      if(swings[s].type > 0)
+      if(swings[ns - 1].p - lo >= min_need)
       {
-         double lo = swings[s].p;
-         int ilo = i_sw;
-         for(int i = 0; i <= i_sw; i++)
-         {
-            if(rates[i].low < lo)
-            { lo = rates[i].low; ilo = i; }
-         }
-         const double sz = swings[s].p - lo;
-         if(sz >= min_need && (best_dir == 0 || rates[ilo].time >= best_tt))
-         {
-            best_dir = -1;
-            best_origin = swings[s].p;
-            best_tip = lo;
-            best_to = swings[s].t;
-            best_tt = rates[ilo].time;
-            best_it = ilo;
-         }
+         dir = -1;
+         origin = swings[ns - 1].p;
+         t_origin = swings[ns - 1].t;
+         tip = lo;
+         t_tip = rates[ilo].time;
+         i_tip = ilo;
       }
       else
       {
-         double hi = swings[s].p;
-         int ihi = i_sw;
-         for(int i = 0; i <= i_sw; i++)
+         dir = 1;
+         origin = swings[ns - 2].p;
+         t_origin = swings[ns - 2].t;
+         tip = swings[ns - 1].p;
+         t_tip = swings[ns - 1].t;
+         i_tip = i_last;
+         for(int i = 0; i < i_last; i++)
          {
-            if(rates[i].high > hi)
-            { hi = rates[i].high; ihi = i; }
-         }
-         const double sz = hi - swings[s].p;
-         if(sz >= min_need && (best_dir == 0 || rates[ihi].time >= best_tt))
-         {
-            best_dir = 1;
-            best_origin = swings[s].p;
-            best_tip = hi;
-            best_to = swings[s].t;
-            best_tt = rates[ihi].time;
-            best_it = ihi;
+            if(rates[i].high > tip)
+            { tip = rates[i].high; t_tip = rates[i].time; i_tip = i; }
          }
       }
    }
+   else
+   {
+      // Последний свинг — лой: Z остаётся хай→этот лой, пока не появится новый хай-свинг.
+      // Откат цены сам по себе плечо не переворачивает (как на скрине Снайпера).
+      dir = -1;
+      origin = swings[ns - 2].p;
+      t_origin = swings[ns - 2].t;
+      tip = swings[ns - 1].p;
+      t_tip = swings[ns - 1].t;
+      i_tip = i_last;
+      for(int i = 0; i < i_last; i++)
+      {
+         if(rates[i].low < tip)
+         { tip = rates[i].low; t_tip = rates[i].time; i_tip = i; }
+      }
+   }
 
-   if(best_dir == 0 || best_to == best_tt)
+   if(dir == 0 || t_origin == t_tip)
+      return false;
+   const double range = MathAbs(origin - tip);
+   if(range < min_need)
       return false;
 
    m.valid = true;
-   m.dir = best_dir;
-   m.origin = best_origin;
-   m.tip = best_tip;
-   m.t_origin = best_to;
-   m.t_tip = best_tt;
-   m.i_tip = best_it;
-   m.range = MathAbs(best_origin - best_tip);
+   m.dir = dir;
+   m.origin = origin;
+   m.tip = tip;
+   m.t_origin = t_origin;
+   m.t_tip = t_tip;
+   m.i_tip = i_tip;
+   m.range = range;
    g_lastImpulseRange = m.range;
    g_lastImpulseDir = m.dir;
    return true;
@@ -5342,13 +5357,6 @@ void DrawFib30Line(const MqlRates &rates[])
       have_mv = BuildLiveContinuedMove(z_rates, mv);
    else
       have_mv = BuildLiveContinuedMove(rates, mv);
-   if(!have_mv)
-   {
-      if(use_struct)
-         have_mv = FindContinuedMove(z_rates, mv);
-      else
-         have_mv = FindContinuedMove(rates, mv);
-   }
    have_mv = have_mv && mv.range > 20.0 * PointValue()
              && mv.t_origin != mv.t_tip;
 
