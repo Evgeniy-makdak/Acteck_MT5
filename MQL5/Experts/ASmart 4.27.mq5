@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.26                                                       |
+//|  ASmart 4.27                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.26 — Z от пробоя предыдущего экстремума"
-#property version   "4.26"
+#property description "ASmart 4.27 — хвост RSI как у Снайпера, с зазором от числа"
+#property version   "4.27"
 
-#define EA_VERSION "4.26"
+#define EA_VERSION "4.27"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart426";
+input string               CommentPrefix        = "ASmart427";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -3888,6 +3888,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart424_");
    if(StringFind(Prefix(), "ASmart425_") != 0)
       DeleteObjectsByPrefix("ASmart425_");
+   if(StringFind(Prefix(), "ASmart426_") != 0)
+      DeleteObjectsByPrefix("ASmart426_");
    Comment("");
    ChartRedraw(0);
 }
@@ -4960,9 +4962,9 @@ int HistoryLenFear()
 
 void DrawFearSparkline(const color clr)
 {
-   const int W = 88;
-   const int H = 26;
-   const int n = MathMin(48, MathMax(12, HistoryLenFear()));
+   const int W = 104;
+   const int H = 32;
+   const int n = MathMin(20, MathMax(12, HistoryLenFear()));
    const string name = Prefix() + "FEAR_SPARK";
 
    if(g_hRSI == INVALID_HANDLE)
@@ -4974,7 +4976,9 @@ void DrawFearSparkline(const color clr)
    if(got < 8)
       return;
 
-   if(!g_fearSparkOn || (int)ObjectGetInteger(0, name, OBJPROP_XSIZE) != W)
+   const int have_w = (int)ObjectGetInteger(0, name, OBJPROP_XSIZE);
+   const int have_h = (int)ObjectGetInteger(0, name, OBJPROP_YSIZE);
+   if(!g_fearSparkOn || have_w != W || have_h != H)
    {
       if(g_fearSparkOn)
       {
@@ -4989,29 +4993,63 @@ void DrawFearSparkline(const color clr)
    }
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 72);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 38);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 128);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 34);
    ObjectSetInteger(0, name, OBJPROP_BACK, false);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
    ObjectSetInteger(0, name, OBJPROP_ZORDER, 210);
 
+   double lo = rsi[0];
+   double hi = rsi[0];
+   for(int i = 1; i < got; i++)
+   {
+      if(rsi[i] < lo) lo = rsi[i];
+      if(rsi[i] > hi) hi = rsi[i];
+   }
+   double span = hi - lo;
+   if(span < 4.0)
+   {
+      const double mid = 0.5 * (hi + lo);
+      lo = mid - 2.0;
+      hi = mid + 2.0;
+      span = hi - lo;
+   }
+   lo -= span * 0.18;
+   hi += span * 0.18;
+   span = hi - lo;
+   if(span < PointValue())
+      span = 1.0;
+
+   double smooth[];
+   ArrayResize(smooth, got);
+   for(int i = 0; i < got; i++)
+   {
+      const double a = rsi[i];
+      const double b = rsi[(i > 0) ? i - 1 : i];
+      const double c = rsi[(i + 1 < got) ? i + 1 : i];
+      smooth[i] = (a + b + c) / 3.0;
+   }
+
    const color bg = (color)ChartGetInteger(0, CHART_COLOR_BACKGROUND);
    g_fearSpark.Erase(ColorToARGB(bg, 255));
    const uint col = ColorToARGB(clr, 255);
    const int pts = got;
+   const int x_right = W - 14;
+   const int x_left = 4;
+   const int y_top = 3;
+   const int y_bot = H - 4;
    for(int k = pts - 1; k > 0; k--)
    {
-      const int x1 = 2 + (int)((pts - 1 - k) * (W - 6) / (pts - 1));
-      const int x2 = 2 + (int)((pts - k) * (W - 6) / (pts - 1));
-      int y1 = (int)MathRound((100.0 - rsi[k]) / 100.0 * (H - 8)) + 4;
-      int y2 = (int)MathRound((100.0 - rsi[k - 1]) / 100.0 * (H - 8)) + 4;
-      if(y1 < 2) y1 = 2;
-      if(y2 < 2) y2 = 2;
-      if(y1 > H - 3) y1 = H - 3;
-      if(y2 > H - 3) y2 = H - 3;
-      g_fearSpark.Line(x1, y1, x2, y2, col);
-      g_fearSpark.Line(x1, y1 + 1, x2, y2 + 1, col);
+      const int x1 = x_left + (int)((pts - 1 - k) * (x_right - x_left) / (pts - 1));
+      const int x2 = x_left + (int)((pts - k) * (x_right - x_left) / (pts - 1));
+      int y1 = y_top + (int)MathRound((hi - smooth[k]) / span * (y_bot - y_top));
+      int y2 = y_top + (int)MathRound((hi - smooth[k - 1]) / span * (y_bot - y_top));
+      if(y1 < y_top) y1 = y_top;
+      if(y2 < y_top) y2 = y_top;
+      if(y1 > y_bot) y1 = y_bot;
+      if(y2 > y_bot) y2 = y_bot;
+      g_fearSpark.LineAA(x1, y1, x2, y2, col);
    }
    g_fearSpark.Update();
 }

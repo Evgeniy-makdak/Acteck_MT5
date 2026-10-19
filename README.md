@@ -1,6 +1,6 @@
-# ASmart 4.26 (MT5)
+# ASmart 4.27 (MT5)
 
-`MQL5/Experts/ASmart 4.26.mq5` — префикс объектов `ASmart426_`
+`MQL5/Experts/ASmart 4.27.mq5` — префикс объектов `ASmart427_`
 
 ## Критично: КЗ и Z с M15
 
@@ -27,7 +27,7 @@
 
 **Сейф:** `SafeSplitDeals=true` — TP 1R + TP 2R.
 
-Снять EA → F7 → **ASmart 4.26**. Пресеты: `MQL5/Presets/Acteck_v4.21_*.set`.  
-Карточка: `UserGuide_ASmart_4.26_RU.txt`. Мануал: `ASmart_4.26_Manual_RU.txt`. Изменения: `CHANGES_V4.23.md`.  
+Снять EA → F7 → **ASmart 4.27**. Пресеты: `MQL5/Presets/Acteck_v4.21_*.set`.  
+Карточка: `UserGuide_ASmart_4.27_RU.txt`. Мануал: `ASmart_4.27_Manual_RU.txt`. Изменения: `CHANGES_V4.23.md`.  
 После коррекции 50% линия «30» оранжевая, Z тусклое; ярким остаётся только актуальное плечо.  
-RSI(14): число и хвост справа сверху (зелёный / жёлтый / красный по зонам 30–70).
+RSI(14): число справа сверху, волна хвоста левее числа с зазором (зелёный / жёлтый / красный по зонам 30–70).
