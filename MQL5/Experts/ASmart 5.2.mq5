@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 5.1                                                        |
+//|  ASmart 5.2                                                        |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 5.1 — границы диапазона КЗ на фигуре Z"
-#property version   "5.1"
+#property description "ASmart 5.2 — Z с пробоя одной границы КЗ"
+#property version   "5.2"
 
-#define EA_VERSION "5.1"
+#define EA_VERSION "5.2"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart51";
+input string               CommentPrefix        = "ASmart52";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -1853,8 +1853,6 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          continue;
       if(StringLen(g_structZones[zi].tf_tag) > 0 && g_structZones[zi].tf_tag != StructureTFTag())
          continue;
-      if(g_structZones[zi].pct >= 2.5)
-         continue;
       const double lvl = g_structZones[zi].imp_start;
       if(lvl == 0.0)
          continue;
@@ -1887,26 +1885,22 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          if(lv[j] <= lv[i] + gap_min)
             continue;
          const datetime ready = (kt[i] > kt[j]) ? kt[i] : kt[j];
-         bool sw_hi = false, sw_lo = false;
          double hi = lv[j];
          double lo = lv[i];
          int br = 0;
          datetime tb = 0;
          double edge = 0.0;
+         // Безоткатное Z: обе КЗ уже есть, первое закрытие за одной из них — опора.
          for(int s = nr - 1; s >= 1; s--)
          {
             if(rates[s].time < ready)
                continue;
             if(rates[s].high > hi) hi = rates[s].high;
             if(rates[s].low < lo) lo = rates[s].low;
-            if(rates[s].high > lv[j]) sw_hi = true;
-            if(rates[s].low < lv[i]) sw_lo = true;
-            if(!sw_hi || !sw_lo)
-               continue;
-            if(rates[s].close < lv[i])
-            { br = -1; tb = rates[s].time; edge = hi; break; }
             if(rates[s].close > lv[j])
             { br = 1; tb = rates[s].time; edge = lo; break; }
+            if(rates[s].close < lv[i])
+            { br = -1; tb = rates[s].time; edge = hi; break; }
          }
          if(br == 0 || tb <= best_t)
             continue;
@@ -3929,6 +3923,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart433_");
    if(StringFind(Prefix(), "ASmart50_") != 0)
       DeleteObjectsByPrefix("ASmart50_");
+   if(StringFind(Prefix(), "ASmart51_") != 0)
+      DeleteObjectsByPrefix("ASmart51_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5410,24 +5406,6 @@ void DrawZBundle(const string tag, const int dir,
    const ENUM_LINE_STYLE zs = active ? ((zw > 1) ? STYLE_DASH : STYLE_DOT) : STYLE_DOT;
    const int sec = PeriodSeconds(EffectiveStructureTF());
 
-   datetime t_left = t_origin;
-   datetime t_right = t_tip;
-   if(t_right < t_left)
-   {
-      datetime sw = t_left;
-      t_left = t_right;
-      t_right = sw;
-   }
-   long span = (long)(t_right - t_left);
-   long wing = (long)sec * 16;
-   if(span / 3 > wing) wing = span / 3;
-   if(wing < (long)sec * 8) wing = (long)sec * 8;
-
-   datetime h0a = (datetime)((long)t_origin - wing);
-   datetime h0b = (datetime)((long)t_origin + wing);
-   if(h0b > t_right) h0b = t_right;
-   if(h0a >= h0b) h0a = (datetime)((long)h0b - (long)sec * 4);
-
    datetime h1a = t_tip;
    datetime h1b = t_now;
    if(h1b < h1a) h1b = (datetime)((long)h1a + (long)sec * 4);
@@ -5447,7 +5425,8 @@ void DrawZBundle(const string tag, const int dir,
          DrawText(tag + "RLT", h1b, g_zdraw_rlo, "КЗ низ", ColorKZ_Support, ANCHOR_LEFT_UPPER);
          ObjectSetInteger(0, tag + "RLT", OBJPROP_FONTSIZE, active ? 9 : 8);
       }
-      DrawHLineSegment(tag + "Z0", h0a, h0b, origin, zcol, zs, zw, "");
+      DrawHLineSegment(tag + "Z0", t_origin, h1b, origin, zcol, STYLE_DOT, active ? 2 : 1,
+                      "опора Z: пробой границы КЗ");
       DrawHLineSegment(tag + "Z1", h1a, h1b, tip, zcol, zs, zw, "");
       DrawTrendSegment(tag + "ZD", t_origin, origin, t_tip, tip, zcol, zs, zw);
       ObjectSetInteger(0, tag + "ZD", OBJPROP_BACK, false);
