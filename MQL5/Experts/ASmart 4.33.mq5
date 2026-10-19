@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.32                                                       |
+//|  ASmart 4.33                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.32 — РМ на кончике Z, вход после возврата в 30%"
-#property version   "4.32"
+#property description "ASmart 4.33 — Z от пробоя КЗ, зона 30% от экстремума"
+#property version   "4.33"
 
-#define EA_VERSION "4.32"
+#define EA_VERSION "4.33"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart432";
+input string               CommentPrefix        = "ASmart433";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -703,6 +703,8 @@ double   g_zlive_tip     = 0.0;
 datetime g_zlive_t0      = 0;
 datetime g_zlive_t1      = 0;
 double   g_zlive_p30     = 0.0;
+double   g_zlive_edge    = 0.0;
+double   g_zprev_edge    = 0.0;
 bool     g_zprev_have    = false;
 int      g_zprev_dir     = 0;
 double   g_zprev_origin  = 0.0;
@@ -1828,174 +1830,116 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(nr < 40)
       return false;
 
-   // Снайпер: одно плечо. База — последний подтверждённый свинг M15 (глубина 3,
-   // не SpeedPreset). Если после него цена обновила предыдущий экстремум,
-   // диагональ идёт от этой базы к живому кончику. Короткий откат плечо не сменяет.
-   const int depth = 3;
-   const int look = MathMin(nr - depth - 2, MathMax(50, StructureLookbackBars));
-   if(look < depth * 3)
+   // Z начинается в пробое диапазона двух КЗ после съёма ликвидности с обеих сторон.
+   // Опора — цена пробитой КЗ. Противоположный экстремум — внешняя граница зоны 30%.
+   double lv[];
+   datetime kt[];
+   int kd[];
+   ArrayResize(lv, 0);
+   ArrayResize(kt, 0);
+   ArrayResize(kd, 0);
+   for(int zi = 0; zi < ArraySize(g_structZones); zi++)
+   {
+      if(g_structZones[zi].kind != SK_KZ || !g_structZones[zi].valid)
+         continue;
+      if(StringLen(g_structZones[zi].tf_tag) > 0 && g_structZones[zi].tf_tag != StructureTFTag())
+         continue;
+      if(g_structZones[zi].pct >= 2.5)
+         continue;
+      const double lvl = g_structZones[zi].imp_start;
+      if(lvl == 0.0)
+         continue;
+      const int n = ArraySize(lv);
+      ArrayResize(lv, n + 1);
+      ArrayResize(kt, n + 1);
+      ArrayResize(kd, n + 1);
+      lv[n] = lvl;
+      kt[n] = g_structZones[zi].t1;
+      kd[n] = g_structZones[zi].direction;
+   }
+   const int nk = ArraySize(lv);
+   if(nk < 2)
       return false;
 
-   datetime pt[];
-   double pp[];
-   int pdir[];
-   ArrayResize(pt, 0);
-   ArrayResize(pp, 0);
-   ArrayResize(pdir, 0);
-   for(int shift = depth; shift < look; shift++)
+   int best_dir = 0;
+   double best_origin = 0.0, best_tip = 0.0, best_edge = 0.0;
+   datetime best_t = 0, best_ttip = 0;
+   const double gap_min = 20.0 * PointValue();
+
+   for(int i = 0; i < nk; i++)
    {
-      bool is_hi = true;
-      bool is_lo = true;
-      for(int k = shift - depth; k <= shift + depth; k++)
+      if(kd[i] <= 0)
+         continue;
+      for(int j = 0; j < nk; j++)
       {
-         if(k < 0 || k >= nr || k == shift)
+         if(kd[j] >= 0)
             continue;
-         if(rates[k].high > rates[shift].high)
-            is_hi = false;
-         if(rates[k].low < rates[shift].low)
-            is_lo = false;
-      }
-      if(is_hi)
-      {
-         const int n = ArraySize(pt);
-         ArrayResize(pt, n + 1);
-         ArrayResize(pp, n + 1);
-         ArrayResize(pdir, n + 1);
-         pt[n] = rates[shift].time;
-         pp[n] = rates[shift].high;
-         pdir[n] = 1;
-      }
-      if(is_lo)
-      {
-         const int n = ArraySize(pt);
-         ArrayResize(pt, n + 1);
-         ArrayResize(pp, n + 1);
-         ArrayResize(pdir, n + 1);
-         pt[n] = rates[shift].time;
-         pp[n] = rates[shift].low;
-         pdir[n] = -1;
-      }
-   }
-   const int np0 = ArraySize(pt);
-   for(int a = 0; a < np0 - 1; a++)
-      for(int b = a + 1; b < np0; b++)
-         if(pt[a] > pt[b])
+         if(lv[j] <= lv[i] + gap_min)
+            continue;
+         const datetime ready = (kt[i] > kt[j]) ? kt[i] : kt[j];
+         bool sw_hi = false, sw_lo = false;
+         double hi = lv[j];
+         double lo = lv[i];
+         int br = 0;
+         datetime tb = 0;
+         double edge = 0.0;
+         for(int s = nr - 1; s >= 1; s--)
          {
-            const datetime ts = pt[a]; pt[a] = pt[b]; pt[b] = ts;
-            const double ps = pp[a]; pp[a] = pp[b]; pp[b] = ps;
-            const int ds = pdir[a]; pdir[a] = pdir[b]; pdir[b] = ds;
+            if(rates[s].time < ready)
+               continue;
+            if(rates[s].high > hi) hi = rates[s].high;
+            if(rates[s].low < lo) lo = rates[s].low;
+            if(rates[s].high > lv[j]) sw_hi = true;
+            if(rates[s].low < lv[i]) sw_lo = true;
+            if(!sw_hi || !sw_lo)
+               continue;
+            if(rates[s].close < lv[i])
+            { br = -1; tb = rates[s].time; edge = hi; break; }
+            if(rates[s].close > lv[j])
+            { br = 1; tb = rates[s].time; edge = lo; break; }
          }
-   datetime st[];
-   double sp[];
-   int sd[];
-   ArrayResize(st, 0);
-   ArrayResize(sp, 0);
-   ArrayResize(sd, 0);
-   for(int i = 0; i < np0; i++)
-   {
-      const int n = ArraySize(st);
-      if(n == 0 || sd[n - 1] != pdir[i])
-      {
-         ArrayResize(st, n + 1);
-         ArrayResize(sp, n + 1);
-         ArrayResize(sd, n + 1);
-         st[n] = pt[i];
-         sp[n] = pp[i];
-         sd[n] = pdir[i];
-      }
-      else if((pdir[i] > 0 && pp[i] >= sp[n - 1]) || (pdir[i] < 0 && pp[i] <= sp[n - 1]))
-      {
-         st[n - 1] = pt[i];
-         sp[n - 1] = pp[i];
-      }
-   }
-   const int ns = ArraySize(st);
-   if(ns < 3)
-      return false;
-
-   const int last = ns - 1;
-   int prev = last - 1;
-   while(prev >= 0 && sd[prev] == sd[last])
-      prev--;
-   if(prev < 0)
-      return false;
-
-   const int live_dir = -sd[last];
-   double live_tip = sp[last];
-   datetime t_live = st[last];
-   const int i_base = RateIndexAtTime(rates, st[last]);
-   if(i_base >= 0)
-   {
-      for(int i = i_base; i >= 0; i--)
-      {
-         if(live_dir > 0 && rates[i].high > live_tip)
-         { live_tip = rates[i].high; t_live = rates[i].time; }
-         if(live_dir < 0 && rates[i].low < live_tip)
-         { live_tip = rates[i].low; t_live = rates[i].time; }
-      }
-   }
-   const bool broke = (live_dir > 0 && live_tip > sp[prev]) || (live_dir < 0 && live_tip < sp[prev]);
-
-   int dir = 0;
-   double origin = 0.0;
-   double tip = 0.0;
-   datetime t_origin = 0;
-   datetime t_tip = 0;
-   if(broke)
-   {
-      dir = live_dir;
-      origin = sp[last];
-      t_origin = st[last];
-      tip = live_tip;
-      t_tip = t_live;
-   }
-   else
-   {
-      dir = sd[last];
-      tip = sp[last];
-      t_tip = st[last];
-      origin = sp[prev];
-      t_origin = st[prev];
-      int back = prev - 1;
-      while(back >= 0 && sd[back] == sd[prev])
-         back--;
-      if(back >= 0 && MathAbs(tip - origin) + PointValue() < MathAbs(sp[prev] - sp[back]))
-      {
-         dir = sd[prev];
-         tip = sp[prev];
-         t_tip = st[prev];
-         origin = sp[back];
-         t_origin = st[back];
-      }
-      const int i_tip0 = RateIndexAtTime(rates, t_tip);
-      if(i_tip0 >= 0)
-      {
-         for(int i = i_tip0; i >= 0; i--)
+         if(br == 0 || tb <= best_t)
+            continue;
+         double tip = (br < 0) ? lv[i] : lv[j];
+         datetime ttip = tb;
+         const int ib = RateIndexAtTime(rates, tb);
+         if(ib >= 0)
          {
-            if(dir > 0 && rates[i].high > tip)
-            { tip = rates[i].high; t_tip = rates[i].time; }
-            if(dir < 0 && rates[i].low < tip)
-            { tip = rates[i].low; t_tip = rates[i].time; }
+            for(int s = ib; s >= 0; s--)
+            {
+               if(br < 0 && rates[s].low < tip)
+               { tip = rates[s].low; ttip = rates[s].time; }
+               if(br > 0 && rates[s].high > tip)
+               { tip = rates[s].high; ttip = rates[s].time; }
+            }
          }
+         best_dir = br;
+         best_origin = (br < 0) ? lv[i] : lv[j];
+         best_tip = tip;
+         best_edge = edge;
+         best_t = tb;
+         best_ttip = ttip;
       }
    }
-   int i_tip = RateIndexAtTime(rates, t_tip);
-   if(i_tip < 0)
-      i_tip = 1;
-
-   const double range = MathAbs(origin - tip);
-   if(range < 20.0 * PointValue() || t_origin == t_tip)
+   if(best_dir == 0)
+      return false;
+   const double range = MathAbs(best_edge - best_origin);
+   if(range < gap_min || best_t == 0)
       return false;
 
    m.valid = true;
-   m.dir = dir;
-   m.origin = origin;
-   m.tip = tip;
-   m.t_origin = t_origin;
-   m.t_tip = t_tip;
-   m.i_tip = i_tip;
+   m.dir = best_dir;
+   m.origin = best_origin;
+   m.tip = best_tip;
+   m.t_origin = best_t;
+   m.t_tip = best_ttip;
+   m.i_tip = RateIndexAtTime(rates, best_ttip);
+   if(m.i_tip < 0)
+      m.i_tip = 1;
    m.range = range;
-   g_lastImpulseRange = m.range;
+   m.z_org1 = best_edge;
+   m.has_iki_z = true;
+   g_lastImpulseRange = MathAbs(best_tip - best_origin);
    g_lastImpulseDir = m.dir;
    return true;
 }
@@ -3963,6 +3907,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart430_");
    if(StringFind(Prefix(), "ASmart431_") != 0)
       DeleteObjectsByPrefix("ASmart431_");
+   if(StringFind(Prefix(), "ASmart432_") != 0)
+      DeleteObjectsByPrefix("ASmart432_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5434,7 +5380,8 @@ void RememberZ(bool &have, int &dir, double &origin, double &tip,
 void DrawZBundle(const string tag, const int dir,
                  const double origin, const double tip,
                  const datetime t_origin, const datetime t_tip,
-                 const double p30, const bool active, const datetime t_now)
+                 const double p30, const bool active, const datetime t_now,
+                 const double zone_edge = 0.0)
 {
    const color z_raw = (dir < 0) ? ColorContinuedMoveDn : ColorContinuedMove;
    const color zcol = active ? z_raw : MixContrast50(z_raw);
@@ -5492,17 +5439,19 @@ void DrawZBundle(const string tag, const int dir,
       datetime t30b = h1b;
       if(t30b <= t_tip)
          t30b = (datetime)((long)t_tip + (long)sec * 8);
-      DrawHLineSegment(tag + "30", t_tip, t30b, p30, c30, STYLE_SOLID, active ? 2 : 1, "");
+      const double edge = (zone_edge != 0.0) ? zone_edge : tip;
+      datetime t_zone = t_origin;
+      if(t_zone > t30b)
+         t_zone = t_tip;
+      DrawHLineSegment(tag + "30", t_zone, t30b, p30, c30, STYLE_SOLID, active ? 2 : 1, "");
       DrawText(tag + "T", t30b, p30, "30", c30, ANCHOR_LEFT_LOWER);
       ObjectSetInteger(0, tag + "T", OBJPROP_FONTSIZE, active ? 9 : 8);
-      ObjectSetString(0, tag + "30", OBJPROP_TOOLTIP,
-                      active ? "30% актуально" : "30% неактуально: коррекция ≥50%");
-      // Зона от экстремума Z до линии 30%. Цвет — сторона разворота от кончика:
-      // импульс вверх → продажа (жёлтая), импульс вниз → покупка (голубая).
-      const color zfill = (dir > 0) ? C'255,228,150' : C'170,214,240';
-      DrawRect(tag + "30Z", t_tip, tip, t30b, p30, ToARGB(zfill, active ? 42 : 20), true, true);
+      ObjectSetString(0, tag + "30", OBJPROP_TOOLTIP, "граница зоны 30%");
+      // Импульс вниз — зона продавца (жёлтая), импульс вверх — зона покупателя (голубая).
+      const color zfill = (dir < 0) ? C'255,228,150' : C'170,214,240';
+      DrawRect(tag + "30Z", t_zone, edge, t30b, p30, ToARGB(zfill, active ? 42 : 20), true, true);
       ObjectSetString(0, tag + "30Z", OBJPROP_TOOLTIP,
-                      (dir > 0) ? "от хая Z до 30%: РМ на продажу" : "от лоя Z до 30%: РМ на покупку");
+                      (dir < 0) ? "зона продавца: возврат и выход вниз" : "зона покупателя: возврат и выход вверх");
    }
 }
 
@@ -5797,7 +5746,7 @@ void DrawFib30Line(const MqlRates &rates[])
       }
       DeleteObjectsWithPrefix(live);
       if(g_zprev_have)
-         DrawZBundle(prev, g_zprev_dir, g_zprev_origin, g_zprev_tip, g_zprev_t0, g_zprev_t1, g_zprev_p30, false, t_now);
+         DrawZBundle(prev, g_zprev_dir, g_zprev_origin, g_zprev_tip, g_zprev_t0, g_zprev_t1, g_zprev_p30, false, t_now, g_zprev_edge);
       g_fib30_retraced = false;
       g_fib30_have = false;
       DrawModelFibOverlays(rates);
@@ -5805,9 +5754,10 @@ void DrawFib30Line(const MqlRates &rates[])
       return;
    }
 
-   const double price_30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (mv.origin - mv.tip);
+   const double zone_edge = (mv.z_org1 != 0.0) ? mv.z_org1 : mv.tip;
+   const double price_30 = zone_edge + (PD_MinCorrectionPct / 100.0) * (mv.origin - zone_edge);
    const double retrace = ContinuedRetracePct(z_rates, mv);
-   const bool spent = (retrace + 1.0e-8 >= PD_CancelRetracePct);
+   const bool spent = false;
    mv.retrace_pct = retrace;
    mv.retraced_30 = (retrace + 1.0e-8 >= PD_MinCorrectionPct);
    mv.cancelled_50 = spent;
@@ -5818,6 +5768,7 @@ void DrawFib30Line(const MqlRates &rates[])
       RememberZ(g_zprev_have, g_zprev_dir, g_zprev_origin, g_zprev_tip,
                 g_zprev_t0, g_zprev_t1, g_zprev_p30,
                 g_zlive_dir, g_zlive_origin, g_zlive_tip, g_zlive_t0, g_zlive_t1, g_zlive_p30);
+      g_zprev_edge = g_zlive_edge;
    }
    if(spent)
    {
@@ -5834,15 +5785,16 @@ void DrawFib30Line(const MqlRates &rates[])
                 mv.dir, mv.origin, mv.tip, mv.t_origin, mv.t_tip, price_30);
       if(g_zprev_have && g_zprev_t0 == mv.t_origin && g_zprev_dir == mv.dir)
          g_zprev_have = false;
+      g_zlive_edge = zone_edge;
    }
 
    if(g_zprev_have)
-      DrawZBundle(prev, g_zprev_dir, g_zprev_origin, g_zprev_tip, g_zprev_t0, g_zprev_t1, g_zprev_p30, false, t_now);
+      DrawZBundle(prev, g_zprev_dir, g_zprev_origin, g_zprev_tip, g_zprev_t0, g_zprev_t1, g_zprev_p30, false, t_now, g_zprev_edge);
    else
       DeleteObjectsWithPrefix(prev);
 
    if(!spent)
-      DrawZBundle(live, mv.dir, mv.origin, mv.tip, mv.t_origin, mv.t_tip, price_30, true, t_now);
+      DrawZBundle(live, mv.dir, mv.origin, mv.tip, mv.t_origin, mv.t_tip, price_30, true, t_now, zone_edge);
 
    g_fib30_origin_t = mv.t_origin;
    g_fib30_price    = price_30;
@@ -5855,10 +5807,7 @@ void DrawFib30Line(const MqlRates &rates[])
    if(ObjExists(pfx + "_BAND")) ObjectDelete(0, pfx + "_BAND");
 
    DrawModelFibOverlays(rates);
-   if(!spent && g_zlive_have)
-      MarkTipReversal(rates);
-   else
-      ClearTipReversalMark();
+   ClearTipReversalMark();
 }
 
 void DrawStructureZone(const SStructureZone &z)
@@ -6943,6 +6892,8 @@ int ClassifyExpansion(const MqlRates &rates[], const SPivot &swings[],
 // → возврат + РМ (точка входа); зона действует до теста.
 void DetectPattern_Expansions(const MqlRates &rates[], const SPivot &swings[], const string tf_tag)
 {
+   // Зона 30% и вход строятся от пробоя диапазона КЗ в DrawFib30Line / TryTipReturnEntry.
+   return;
    if(!ShowDecisionZones && !ShowAll12Patterns) return;
    int n = ArraySize(swings);
    if(n < 4) return;
@@ -8361,70 +8312,48 @@ void TryCasc4EntryFromRM(const MqlRates &rates[])
    g_casc4Spent = z.t1;
 }
 
-// Снайпер: РМ на кончике Z рассматривается, когда цена вышла за линию 30%,
-// вернулась в зону и закрылась в сторону этого РМ.
+// Вход только после возврата в зону 30% и выхода из неё в сторону импульса пробоя КЗ.
 void TryTipReturnEntry(const MqlRates &rates[])
 {
-   if(!EnableLessonEntries || g_tipRmTime == 0 || g_tipRmDir == 0)
+   if(!EnableLessonEntries || !g_zlive_have || g_zlive_dir == 0)
       return;
-   if(g_tipRmSpent != 0 && g_tipRmSpent == g_tipRmTime)
+   if(g_tipRmSpent != 0 && g_tipRmSpent == g_zlive_t0)
       return;
    const int n = ArraySize(rates);
    if(n < 4)
       return;
+   const double z_hi = MathMax(g_zlive_edge, g_zlive_p30);
+   const double z_lo = MathMin(g_zlive_edge, g_zlive_p30);
+   if(z_hi <= z_lo)
+      return;
 
-   int rm_i = -1;
-   for(int i = 1; i < n; i++)
+   bool was_out = false;
+   bool returned = false;
+   for(int i = n - 1; i >= 1; i--)
    {
-      if(rates[i].time == g_tipRmTime)
+      if(rates[i].time < g_zlive_t0)
+         continue;
+      const bool inside = (rates[i].high >= z_lo && rates[i].low <= z_hi);
+      const bool beyond = (g_zlive_dir < 0) ? (rates[i].close < z_lo) : (rates[i].close > z_hi);
+      if(!returned)
       {
-         rm_i = i;
-         break;
+         if(beyond)
+            was_out = true;
+         if(was_out && inside)
+            returned = true;
+      }
+      else if(i == 1 && beyond)
+      {
+         ExecuteSignal("B", g_zlive_dir, rates[1], z_hi, z_lo, g_expT2Trades);
+         g_tipRmSpent = g_zlive_t0;
+         return;
       }
    }
-   if(rm_i < 2)
-      return;
-
-   const double z_hi = MathMax(g_tipRmTip, g_tipRmP30);
-   const double z_lo = MathMin(g_tipRmTip, g_tipRmP30);
-   bool left = false;
-   bool back = false;
-   for(int i = rm_i - 1; i >= 1; i--)
-   {
-      if(!left)
-      {
-         if(g_tipRmDir < 0 && rates[i].low < z_lo)
-            left = true;
-         else if(g_tipRmDir > 0 && rates[i].high > z_hi)
-            left = true;
-      }
-      else if(rates[i].high >= z_lo && rates[i].low <= z_hi)
-         back = true;
-   }
-   if(!left || !back)
-      return;
-
-   const MqlRates bar = rates[1];
-   if(!(bar.high >= z_lo && bar.low <= z_hi))
-      return;
-   if(g_tipRmDir < 0 && !(bar.close < bar.open))
-      return;
-   if(g_tipRmDir > 0 && !(bar.close > bar.open))
-      return;
-
-   ExecuteSignal("B", g_tipRmDir, bar, z_hi, z_lo, g_expT2Trades);
-   g_tipRmSpent = g_tipRmTime;
 }
 
 void TryLessonStructureEntries(const MqlRates &rates[])
 {
    TryTipReturnEntry(rates);
-   TryPDT1EntryFromRM(rates);
-   TryPDT2EntryFromRM(rates);
-   TryExpT1EntryFromRM(rates);
-   TryExpT2EntryFromRM(rates);
-   TryCasc3EntryFromRM(rates);
-   TryCasc4EntryFromRM(rates);
 }
 
 //=========================
