@@ -236,8 +236,8 @@ input int                  SightBarsWidth       = 14;     // ширина рам
 input int                  SightDashBars        = 5;      // длина RGB-чёрточек (баров)
 input double               SightNearATR         = 1.5;
 input bool                 SightLevelsLive      = true;
-input int                  SightBB_Period       = 100;    // период Боллинджера прицела (Снайпер)
-input double               SightBB_Deviation    = 2.0;    // отклонение полос
+input int                  SightBB_Period       = 100;    // период Боллинджера прицела, всегда с H1
+input double               SightBB_Deviation    = 2.0;    // отклонение полос H1
 input int                  SightBB_Lookback     = 12;     // баров поиска выхода за полосу и возврата
 input color                ColorSightBuy        = clrDodgerBlue;  // голубой BUY
 input color                ColorSightSell       = clrMaroon;      // бордовый SELL
@@ -259,9 +259,9 @@ input double               SafeImpulseK         = 0.30;   // (режим partial
 input bool                 ScaleLotBySetupQuality = false; // старый масштаб лота по «зрелости» сетапа (не индекс)
 input int                  SetupQualityMinToTrade = 0;    // 0 = выкл.; порог зрелости сетапа (не индекс страха)
 input int                  FearHistoryLen       = 24;     // точки истории для ломаной
-input color                ColorFearExtreme     = clrIndianRed;     // 0–30 и 70–100
-input color                ColorFearTransition  = clrDarkGoldenrod; // 30–35 и 65–70
-input color                ColorFearNeutral     = clrSeaGreen;      // 35–65
+input color                ColorFearExtreme     = clrRed;   // вне 30 и 70
+input color                ColorFearTransition  = clrGold;  // 30–35 и 65–70
+input color                ColorFearNeutral     = clrLime;  // 35–65 баланс
 
 // совместимость со старыми пресетами (.set): те же слоты, другие имена не ломают Load
 input bool                 ShowProbabilityHUD   = true;   // устар.: синоним ShowFearIndexHUD
@@ -4430,32 +4430,42 @@ bool SightCloseInside(const MqlRates &rates[], const int shift, const double up,
    return (rates[shift].close <= up && rates[shift].close >= lo);
 }
 
-// Снайпер: внутри канала → импульс за внешнюю полосу → закрытие обратно внутрь.
-// Прямоугольник РМ только на свече этого возврата (последняя закрытая).
+// Прицел: полосы Боллинджера всегда с H1, какой бы график ни был открыт.
+bool LoadHourlySightRates(MqlRates &out[])
+{
+   ArraySetAsSeries(out, true);
+   const int need = MathMax(160, SightBB_Period + SightBB_Lookback + 40);
+   return (CopyRates(_Symbol, PERIOD_H1, 0, need, out) >= SightBB_Period + 10);
+}
+
+// Снайпер: внутри канала H1 → импульс за внешнюю полосу → закрытие обратно внутрь.
 bool SightImpulseReturned(const MqlRates &rates[], const int direction, int &ret_shift)
 {
    ret_shift = 1;
    if(direction == 0)
       return false;
-   const int nr = ArraySize(rates);
+   MqlRates h1[];
+   if(!LoadHourlySightRates(h1))
+      return false;
+   const int nr = ArraySize(h1);
    const int period = MathMax(5, SightBB_Period);
    const int look = MathMin(nr - 1, MathMax(4, SightBB_Lookback));
    if(nr < period + look + 2)
       return false;
 
    double up = 0.0, mid = 0.0, lo = 0.0;
-   if(!BollingerAt(rates, 1, up, mid, lo))
+   if(!BollingerAt(h1, 1, up, mid, lo))
       return false;
-   if(!SightCloseInside(rates, 1, up, lo))
+   if(!SightCloseInside(h1, 1, up, lo))
       return false;
 
    int pierce_i = -1;
    for(int i = 1; i <= look; i++)
    {
       double u = 0.0, m = 0.0, l = 0.0;
-      if(!BollingerAt(rates, i, u, m, l))
+      if(!BollingerAt(h1, i, u, m, l))
          continue;
-      const bool pierced = (direction < 0) ? (rates[i].high > u) : (rates[i].low < l);
+      const bool pierced = (direction < 0) ? (h1[i].high > u) : (h1[i].low < l);
       if(pierced)
       {
          pierce_i = i;
@@ -4468,16 +4478,16 @@ bool SightImpulseReturned(const MqlRates &rates[], const int direction, int &ret
    bool inside_before = false;
    {
       double u = 0.0, m = 0.0, l = 0.0;
-      if(BollingerAt(rates, pierce_i, u, m, l)
-         && rates[pierce_i].open <= u && rates[pierce_i].open >= l)
+      if(BollingerAt(h1, pierce_i, u, m, l)
+         && h1[pierce_i].open <= u && h1[pierce_i].open >= l)
          inside_before = true;
    }
    for(int i = pierce_i + 1; i <= look && !inside_before; i++)
    {
       double u = 0.0, m = 0.0, l = 0.0;
-      if(!BollingerAt(rates, i, u, m, l))
+      if(!BollingerAt(h1, i, u, m, l))
          continue;
-      if(SightCloseInside(rates, i, u, l))
+      if(SightCloseInside(h1, i, u, l))
          inside_before = true;
    }
    if(!inside_before)
@@ -4487,9 +4497,9 @@ bool SightImpulseReturned(const MqlRates &rates[], const int direction, int &ret
    for(int i = pierce_i - 1; i >= 2; i--)
    {
       double u = 0.0, m = 0.0, l = 0.0;
-      if(!BollingerAt(rates, i, u, m, l))
+      if(!BollingerAt(h1, i, u, m, l))
          continue;
-      if(SightCloseInside(rates, i, u, l))
+      if(SightCloseInside(h1, i, u, l))
          return false;
    }
    return true;
@@ -4510,7 +4520,12 @@ void NudgeSightLevelsLive(const MqlRates &rates[])
 {
    if(!SightLevelsLive)
       return;
-   ApplySightBands(rates, 0);
+   MqlRates h1[];
+   if(!LoadHourlySightRates(h1))
+      return;
+   ApplySightBands(h1, 0);
+   if(ArraySize(rates) < 1)
+      return;
 }
 
 // Прицел (эталонный скрин): пустая пунктирная рамка + RGB-чёрточки + подпись.
@@ -4612,9 +4627,8 @@ void MaintainSightIntrabar(const MqlRates &rates[])
 
 void UpdateSight(const MqlRates &rates[])
 {
-   // Прицел = Боллинджер периода SightBB_Period (по умолчанию 100) на рабочем ТФ.
+   // Прицел = Боллинджер SightBB_Period (100) строго с H1, не с ТФ графика.
    // Красная черта = верхняя полоса, зелёная = средняя, синяя = нижняя.
-   // Сторона BUY/SELL — только после импульса за полосу и закрытия обратно внутрь.
 
    if(!ShowSight && !RequireSightForEntry && !AlignBreakoutWithSight)
    {
@@ -4626,7 +4640,10 @@ void UpdateSight(const MqlRates &rates[])
    const int old_dir = g_sightDirection;
    const bool had = g_sightActive;
 
-   ApplySightBands(rates, (SightLevelsLive ? 0 : 1));
+   MqlRates h1[];
+   if(!LoadHourlySightRates(h1))
+      return;
+   ApplySightBands(h1, (SightLevelsLive ? 0 : 1));
    if(!g_sightActive)
       return;
 
@@ -4971,7 +4988,8 @@ void UpdateFearIndexHUD(const int display_value)
    DrawFearSparkline(c);
    HudLabel(Prefix() + "PROB_NUM", 14, 36,
             IntegerToString(display_value), c, 22, "Arial Bold");
-   ObjectSetString(0, Prefix() + "PROB_NUM", OBJPROP_TOOLTIP, "RSI 14 — индекс страха");
+   ObjectSetString(0, Prefix() + "PROB_NUM", OBJPROP_TOOLTIP,
+                   "RSI 14: 35–65 зелёный, 30–35 и 65–70 жёлтый, вне 30/70 красный");
 }
 
 void UpdateProbabilityHUD(const int display_value)
