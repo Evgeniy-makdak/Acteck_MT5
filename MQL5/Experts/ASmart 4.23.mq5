@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.22                                                       |
+//|  ASmart 4.23                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.22 — ИКИ-КЗ по уроку 2128 + ПД/расширение/каскад + Сейф 1R+2R"
-#property version   "4.22"
+#property description "ASmart 4.23 — КЗ и Z строго с M15; вход с рабочего ТФ; Сейф 1R+2R"
+#property version   "4.23"
 
-#define EA_VERSION "4.22"
+#define EA_VERSION "4.23"
 
 
 //=========================
@@ -160,7 +160,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart422";
+input string               CommentPrefix        = "ASmart423";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -366,11 +366,14 @@ input bool                 EnableCasc4_Entries  = true;
 input color                ColorPatternBuy      = clrDodgerBlue;
 input color                ColorPatternSell     = clrOrangeRed;
 
-input group "=== Sniper: Dual TF (M1+M15) ==="
+input group "=== Sniper: Dual TF / КЗ с M15 ==="
 input bool                 UseVirtualTF         = true;   // как в Sniper-Pro
 input ENUM_TIMEFRAMES      FastTF               = PERIOD_M1;
 input ENUM_TIMEFRAMES      SlowTF               = PERIOD_M15;
-input bool                 ShowSlowTFStructures = false;  // UI: M15-разметка выкл.
+// КРИТИЧНО (Снайпер): КЗ и Z (продолженное) ВСЕГДА с StructureTF (=M15),
+// даже если рабочий график M5. При смене ТФ уровни КЗ не меняются.
+input ENUM_TIMEFRAMES      StructureTF          = PERIOD_M15; // ТФ разметки КЗ и Z
+input bool                 ShowSlowTFStructures = false;  // UI: прочие M15-паттерны (не КЗ)
 input bool                 RequireMTFConfluence = false;  // вход только при совпадении направлений
 input color                ColorSlowTF          = clrGold;
 
@@ -630,6 +633,11 @@ int    BaseUpdateDir(const SBaseBar &prev, const SBaseBar &cur, const MqlRates &
 int    ExpandBaseEvents(const SBaseBar &bases[], const MqlRates &rates[], SBaseEvent &ev[]);
 void   DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag);
 void   DetectExpansionModels_Sniper(const MqlRates &rates[], const string tf_tag);
+bool   LoadStructureRates(MqlRates &out[], const int need_bars);
+string StructureTFTag();
+ENUM_TIMEFRAMES EffectiveStructureTF();
+bool   IsStructureKZZone(const SStructureZone &z);
+void   RunPatternEngineOnRates(const MqlRates &rates[], const string tf_tag, const int depth, const bool include_kz);
 void   DrawModelFibOverlays(const MqlRates &rates[]);
 void   DrawSniperPathLegs(const MqlRates &rates[]);
 void   DrawBasePathDebug(const MqlRates &rates[]);
@@ -2820,7 +2828,7 @@ bool FindTradeableIKI_KZ(const MqlRates &rates[],
       best_dist = 1.0e100;
       for(int i = 0; i < ArraySize(g_structZones); i++)
       {
-         if(g_structZones[i].kind != SK_KZ) continue;
+         if(!IsStructureKZZone(g_structZones[i])) continue;
          if(!g_structZones[i].valid && !g_structZones[i].active) continue;
          // pct: 1=ИКИ, 2=пробой, 3=внутр
          if(pass == 0 && g_structZones[i].pct >= 2.5) continue;
@@ -4869,6 +4877,34 @@ string ShortTFName(const ENUM_TIMEFRAMES tf)
    return s;
 }
 
+// Снайпер: КЗ/Z всегда с StructureTF (по умолчанию M15), не с ТФ графика.
+ENUM_TIMEFRAMES EffectiveStructureTF()
+{
+   if(StructureTF == PERIOD_CURRENT || StructureTF == PERIOD_M1)
+      return PERIOD_M15;
+   return StructureTF;
+}
+
+string StructureTFTag()
+{
+   return ShortTFName(EffectiveStructureTF());
+}
+
+bool LoadStructureRates(MqlRates &out[], const int need_bars)
+{
+   ArraySetAsSeries(out, true);
+   const int need = MathMax(80, need_bars);
+   const int copied = CopyRates(_Symbol, EffectiveStructureTF(), 0, need, out);
+   return (copied >= 80);
+}
+
+bool IsStructureKZZone(const SStructureZone &z)
+{
+   if(z.kind != SK_KZ) return false;
+   if(StringLen(z.tf_tag) == 0) return true; // legacy / chart==structure
+   return (z.tf_tag == StructureTFTag());
+}
+
 string PatternName(const int pat)
 {
    switch(pat)
@@ -5111,7 +5147,8 @@ void DrawBasePathDebug(const MqlRates &rates[])
 
 void DrawFib30Line(const MqlRates &rates[])
 {
-   // Z по базовым свечам + вспомог. «30» + подпись -0.00. Модели 38.2/23.6 — DrawModelFibOverlays.
+   // Z / «30»: Снайпер — продолженное с StructureTF (M15), не с рабочего M5.
+   // На растянутом ходе без нового ИКИ на M15 новых КЗ нет; Z — одно плечо.
    const string pfx  = Prefix() + "FIB30";
    const string live = pfx + "_";
    if(!ShowFib30 && !ShowContinuedMoveZ)
@@ -5125,10 +5162,28 @@ void DrawFib30Line(const MqlRates &rates[])
       return;
    }
 
+   MqlRates z_rates[];
+   const bool use_struct = (EffectiveStructureTF() != Timeframe);
+   if(use_struct)
+   {
+      if(!LoadStructureRates(z_rates, MathMax(400, StructureLookbackBars + 50)))
+      {
+         DeleteObjectsWithPrefix(live);
+         g_fib30_have = false;
+         DrawModelFibOverlays(rates);
+         return;
+      }
+   }
+
    SContinuedMove mv;
-   const bool have_mv = FindContinuedMove(rates, mv) && mv.range > MinContinuedMoveRange()
-                        && MathAbs(mv.origin - mv.tip) > MinContinuedMoveRange()
-                        && mv.t_origin != mv.t_tip;
+   bool have_mv = false;
+   if(use_struct)
+      have_mv = FindContinuedMove(z_rates, mv);
+   else
+      have_mv = FindContinuedMove(rates, mv);
+   have_mv = have_mv && mv.range > MinContinuedMoveRange()
+             && MathAbs(mv.origin - mv.tip) > MinContinuedMoveRange()
+             && mv.t_origin != mv.t_tip;
 
    if(g_fib30_have && have_mv)
    {
@@ -5157,7 +5212,8 @@ void DrawFib30Line(const MqlRates &rates[])
    const datetime time_0   = mv.t_tip;
    const double price_30 = price_0 + (PD_MinCorrectionPct / 100.0) * (price_100 - price_0);
 
-   const int sec = PeriodSeconds(Timeframe);
+   // длина крыльев Z — в барах StructureTF (M15)
+   const int sec = PeriodSeconds(EffectiveStructureTF());
    datetime t_left = time_100;
    datetime t_right = time_0;
    if(t_right < t_left)
@@ -5329,7 +5385,10 @@ void DrawStructureZone(const SStructureZone &z)
                          : (0.5 * (z.high + z.low));
       color kc = (z.direction > 0) ? ColorKZ_Support : ColorKZ;
       kc = InkColor(kc, ink);
-      const int sec = PeriodSeconds(Timeframe);
+      // КЗ считаются на StructureTF (M15) — длина риски в барах StructureTF
+      const int sec = (z.kind == SK_KZ)
+                      ? PeriodSeconds(EffectiveStructureTF())
+                      : PeriodSeconds(Timeframe);
       datetime t_a = z.t1;
       datetime t_b = z.t2;
       if(t_b < t_a) { datetime sw = t_a; t_a = t_b; t_b = sw; }
@@ -5626,7 +5685,8 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
    const double zh = MathMax(PointValue() * 8.0, (atr > 0.0 ? MathMax(0.35, ZU_HeightATR_Mult) * atr : PointValue() * 30.0));
    const double eps = MathMax(PointValue() * 2.0, (atr > 0.0 ? 0.05 * atr : PointValue() * 5.0));
    const double near = MathMax(zh * 0.75, eps * 4.0);
-   const int sec = PeriodSeconds(Timeframe);
+   // секунды бара StructureTF (M15), не рабочего M5
+   const int sec = PeriodSeconds(EffectiveStructureTF());
    const datetime now_t = rates[0].time;
    const int max_kz = MathMax(1, MaxActiveKZ);
    const double min_move_main = MinContinuedMoveRange();
@@ -5639,6 +5699,7 @@ void DetectCorrectionZones_IKI(const MqlRates &rates[], const string tf_tag)
 
    // Кандидаты по времени (старые → новые)
    // c_src: 1=ИКИ, 2=пробитие, 3=внутренняя ИКИ
+   // На «растянутом» продолженном ходе без действительного ИКИ новых КЗ нет.
    double   c_level[];
    double   c_imp_end[];
    double   c_range[];
@@ -6741,10 +6802,11 @@ void DetectGUDLevels(const MqlRates &rates[], const SPivot &swings[], const stri
    }
 }
 
-void RunPatternEngineOnRates(const MqlRates &rates[], const string tf_tag, const int depth)
+void RunPatternEngineOnRates(const MqlRates &rates[], const string tf_tag, const int depth, const bool include_kz)
 {
-   // 3.0: сначала грамматика Снайпера (базовые → ИКИ → КЗ → модели)
-   DetectCorrectionZones_IKI(rates, tf_tag);
+   // КЗ (include_kz) — только с StructureTF/M15; на рабочем M5 не размечаем свои КЗ
+   if(include_kz)
+      DetectCorrectionZones_IKI(rates, tf_tag);
    DetectExpansionModels_Sniper(rates, tf_tag);
 
    SPivot swings[];
@@ -6768,22 +6830,24 @@ void UpdateDualTFStructures()
 
    int need = MathMax(400, StructureLookbackBars + 50);
    int depth = EffectiveSwingDepth();
+   const ENUM_TIMEFRAMES stf = EffectiveStructureTF();
 
-   if(FastTF != Timeframe)
+   if(FastTF != Timeframe && FastTF != stf)
    {
       MqlRates fast[];
       ArraySetAsSeries(fast, true);
+      // без КЗ: КЗ только с StructureTF
       if(CopyRates(_Symbol, FastTF, 0, need, fast) >= 80)
-         RunPatternEngineOnRates(fast, ShortTFName(FastTF), MathMax(2, depth / 2));
+         RunPatternEngineOnRates(fast, ShortTFName(FastTF), MathMax(2, depth / 2), false);
    }
 
-   if(SlowTF == Timeframe)
+   if(SlowTF == Timeframe || SlowTF == stf)
       return;
    MqlRates slow[];
    ArraySetAsSeries(slow, true);
    if(CopyRates(_Symbol, SlowTF, 0, need, slow) < 80)
       return;
-   RunPatternEngineOnRates(slow, ShortTFName(SlowTF), depth);
+   RunPatternEngineOnRates(slow, ShortTFName(SlowTF), depth, false);
 }
 
 bool DetectMTFConfluence(const int direction)
@@ -6844,17 +6908,34 @@ void UpdateSniperStructures(const MqlRates &rates[])
    UpdateBoundariesChannel(rates);
    UpdateBalanceRSIPanel();
 
+   const int need = MathMax(400, StructureLookbackBars + 50);
+   const string st_tag = StructureTFTag();
+
+   // 4.23 КРИТИЧНО: КЗ ВСЕГДА с StructureTF (M15), независимо от ТФ графика.
+   // На «растянутом» продолженном ходе M15 не даёт ложных КЗ от шума M5.
+   if(ShowPullbackZones || ShowAll12Patterns || (UseIKI_KZ_ForSignals && !UseLegacyCZSignals))
+   {
+      MqlRates kz_rates[];
+      if(LoadStructureRates(kz_rates, need))
+         DetectCorrectionZones_IKI(kz_rates, st_tag);
+   }
+
    if(!ShowDecisionZones && !ShowPullbackZones && !ShowCascadeMarks && !ShowReversalMoments && !ShowAll12Patterns && !ShowGUDLevels && !ShowModelFib382 && !ShowModelFib236)
    {
       if(UseVirtualTF) UpdateDualTFStructures();
+      // КЗ всё равно рисуем (если есть) — они с M15
+      for(int i = 0; i < ArraySize(g_structZones); i++)
+      {
+         if(g_structZones[i].kind == SK_KZ && g_structZones[i].valid)
+            DrawStructureZone(g_structZones[i]);
+      }
       return;
    }
 
-   // основной ТФ графика (Fast / chart)
+   // рабочий ТФ графика — паттерны/РМ; КЗ уже построены с StructureTF выше
    string tag = UseVirtualTF ? ShortTFName(Timeframe) : "";
-   RunPatternEngineOnRates(rates, tag, EffectiveSwingDepth());
+   RunPatternEngineOnRates(rates, tag, EffectiveSwingDepth(), false);
 
-   // Slow TF (M15) поверх
    UpdateDualTFStructures();
    CheckMTFConfluenceAlert();
 
@@ -6863,13 +6944,20 @@ void UpdateSniperStructures(const MqlRates &rates[])
    {
       if(!g_structZones[i].valid && g_structZones[i].kind != SK_CASCADE && g_structZones[i].kind != SK_ZU)
          continue;
-      // не рисовать чужие ТФ, если ShowSlowTFStructures=false
+      // КЗ с StructureTF всегда видимы на любом графике
+      if(g_structZones[i].kind == SK_KZ)
+      {
+         if(IsStructureKZZone(g_structZones[i]))
+            DrawStructureZone(g_structZones[i]);
+         continue;
+      }
+      // прочие структуры чужого ТФ — только если ShowSlowTFStructures
       if(!ShowSlowTFStructures && StringLen(g_structZones[i].tf_tag) > 0
          && g_structZones[i].tf_tag != chart_tag)
          continue;
       DrawStructureZone(g_structZones[i]);
    }
-   // Fib30 — после UpdateSight (см. RefreshSniperContext), здесь не рисуем
+   // Fib30/Z — после UpdateSight (см. RefreshSniperContext)
 }
 
 
@@ -8675,6 +8763,8 @@ int OnInit()
                     (int)ShowAll12Patterns, (int)UseVirtualTF,
                     ShortTFName(FastTF), ShortTFName(SlowTF),
                     (int)ShowBalanceRSI, (int)ShowBoundariesChannel));
+   Log(StringFormat("КЗ/Z StructureTF=%s (рабочий Timeframe=%s) — разметка КЗ не зависит от ТФ графика",
+                    StructureTFTag(), ShortTFName(Timeframe)));
    Log(StringFormat("Sniper structures: PD_corr>=%.0f%%, PD_break>=%.0f%%, ZU_size=%.0f%%, cascade_max=%.0f%%",
                     PD_MinCorrectionPct, PD_BreakoutPct, ZU_SizePctOfMove, CascadeMaxBreakoutPct));
 
