@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.30                                                       |
+//|  ASmart 4.31                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.30 — расширение в сторону последнего пробоя, зона 30%"
-#property version   "4.30"
+#property description "ASmart 4.31 — зона 30% от экстремума Z до линии 30"
+#property version   "4.31"
 
-#define EA_VERSION "4.30"
+#define EA_VERSION "4.31"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart430";
+input string               CommentPrefix        = "ASmart431";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -3952,6 +3952,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart428_");
    if(StringFind(Prefix(), "ASmart429_") != 0)
       DeleteObjectsByPrefix("ASmart429_");
+   if(StringFind(Prefix(), "ASmart430_") != 0)
+      DeleteObjectsByPrefix("ASmart430_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5486,14 +5488,12 @@ void DrawZBundle(const string tag, const int dir,
       ObjectSetInteger(0, tag + "T", OBJPROP_FONTSIZE, active ? 9 : 8);
       ObjectSetString(0, tag + "30", OBJPROP_TOOLTIP,
                       active ? "30% актуально" : "30% неактуально: коррекция ≥50%");
-      // Зона отката 30%: прямоугольник со слабой заливкой.
-      // Покупка (последний импульс вверх) — голубая, продажа — жёлтая.
-      const double rng = MathAbs(tip - origin);
-      const double band = MathMax(PointValue() * 6.0, 0.07 * rng);
+      // Зона ликвидности: от экстремума конца Z до линии 30% этого плеча.
+      // Покупка (импульс вверх) — голубая, продажа — жёлтая.
       const color zfill = (dir > 0) ? C'170,214,240' : C'255,228,150';
-      DrawRect(tag + "30Z", t_tip, p30 + band, t30b, p30 - band, ToARGB(zfill, active ? 42 : 20), true, true);
+      DrawRect(tag + "30Z", t_tip, tip, t30b, p30, ToARGB(zfill, active ? 42 : 20), true, true);
       ObjectSetString(0, tag + "30Z", OBJPROP_TOOLTIP,
-                      (dir > 0) ? "30% откат: ищем РМ на покупку" : "30% откат: ищем РМ на продажу");
+                      (dir > 0) ? "от кончика Z до 30%: РМ на покупку" : "от кончика Z до 30%: РМ на продажу");
    }
 }
 
@@ -6857,11 +6857,10 @@ void DetectPattern_Expansions(const MqlRates &rates[], const SPivot &swings[], c
          // Зона — откат 30% этого хода: голубая покупка / жёлтая продажа.
          const int entry_dir = mv.dir;
          const double p30 = mv.tip + (ZU_SizePctOfMove / 100.0) * (mv.origin - mv.tip);
-         const double half = MathMax(PointValue() * 6.0, 0.07 * mv.range);
          string lab = StringFormat("%s %s ЗУ30", PatternName(PAT_EXP_T2), (entry_dir>0?"BUY":"SELL"));
          PushStructureZoneEx(SK_ZU, PAT_EXP_T2, entry_dir, mv.t_tip,
                              now_t + (datetime)(sec * MathMax(30, SightBarsWidth)),
-                             p30 + half, p30 - half, mv.range, ZU_SizePctOfMove, lab, true, tf_tag,
+                             MathMax(mv.tip, p30), MathMin(mv.tip, p30), mv.range, ZU_SizePctOfMove, lab, true, tf_tag,
                              mv.origin, mv.tip);
       }
    }
@@ -6926,9 +6925,8 @@ void DetectPattern_Expansions(const MqlRates &rates[], const SPivot &swings[], c
       const double impulse_tip = (dir > 0) ? (range_hi + beyond) : (range_lo - beyond);
       const double impulse_base = (dir > 0) ? range_hi : range_lo;
       const double p30 = impulse_tip + (ZU_SizePctOfMove / 100.0) * (impulse_base - impulse_tip);
-      const double half = MathMax(PointValue() * 6.0, 0.07 * MathAbs(impulse_tip - impulse_base));
-      const double z_hi = p30 + half;
-      const double z_lo = p30 - half;
+      const double z_hi = MathMax(impulse_tip, p30);
+      const double z_lo = MathMin(impulse_tip, p30);
 
       double beyond_pct = (X > 0) ? (100.0 * beyond / X) : 0.0;
       bool valid = !(CascadeMaxBreakoutPct > 0.0 && beyond_pct > CascadeMaxBreakoutPct);
