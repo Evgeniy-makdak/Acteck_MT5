@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 5.0                                                        |
+//|  ASmart 5.1                                                        |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 5.0 — Z от пробоя КЗ, зона 30% от экстремума"
-#property version   "5.0"
+#property description "ASmart 5.1 — границы диапазона КЗ на фигуре Z"
+#property version   "5.1"
 
-#define EA_VERSION "5.0"
+#define EA_VERSION "5.1"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart50";
+input string               CommentPrefix        = "ASmart51";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -705,6 +705,15 @@ datetime g_zlive_t1      = 0;
 double   g_zlive_p30     = 0.0;
 double   g_zlive_edge    = 0.0;
 double   g_zprev_edge    = 0.0;
+double   g_zlive_rhi     = 0.0;
+double   g_zlive_rlo     = 0.0;
+datetime g_zlive_rt      = 0;
+double   g_zprev_rhi     = 0.0;
+double   g_zprev_rlo     = 0.0;
+datetime g_zprev_rt      = 0;
+double   g_zdraw_rhi     = 0.0;
+double   g_zdraw_rlo     = 0.0;
+datetime g_zdraw_rt      = 0;
 bool     g_zprev_have    = false;
 int      g_zprev_dir     = 0;
 double   g_zprev_origin  = 0.0;
@@ -1863,7 +1872,8 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
 
    int best_dir = 0;
    double best_origin = 0.0, best_tip = 0.0, best_edge = 0.0;
-   datetime best_t = 0, best_ttip = 0;
+   double best_rhi = 0.0, best_rlo = 0.0;
+   datetime best_t = 0, best_ttip = 0, best_ready = 0;
    const double gap_min = 20.0 * PointValue();
 
    for(int i = 0; i < nk; i++)
@@ -1917,6 +1927,9 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
          best_origin = (br < 0) ? lv[i] : lv[j];
          best_tip = tip;
          best_edge = edge;
+         best_rhi = lv[j];
+         best_rlo = lv[i];
+         best_ready = ready;
          best_t = tb;
          best_ttip = ttip;
       }
@@ -1938,6 +1951,9 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       m.i_tip = 1;
    m.range = range;
    m.z_org1 = best_edge;
+   m.z_tip1 = best_rhi;
+   m.z_corr = best_rlo;
+   m.z_t_org1 = best_ready;
    m.has_iki_z = true;
    g_lastImpulseRange = MathAbs(best_tip - best_origin);
    g_lastImpulseDir = m.dir;
@@ -3911,6 +3927,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart432_");
    if(StringFind(Prefix(), "ASmart433_") != 0)
       DeleteObjectsByPrefix("ASmart433_");
+   if(StringFind(Prefix(), "ASmart50_") != 0)
+      DeleteObjectsByPrefix("ASmart50_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5417,6 +5435,18 @@ void DrawZBundle(const string tag, const int dir,
 
    if(ShowContinuedMoveZ)
    {
+      if(g_zdraw_rhi > g_zdraw_rlo && g_zdraw_rlo > 0.0)
+      {
+         datetime tr0 = g_zdraw_rt;
+         if(tr0 <= 0 || tr0 > t_origin)
+            tr0 = (datetime)((long)t_origin - (long)sec * 8);
+         DrawHLineSegment(tag + "RH", tr0, h1b, g_zdraw_rhi, ColorKZ, STYLE_DASH, active ? 2 : 1, "верхняя КЗ диапазона");
+         DrawText(tag + "RHT", h1b, g_zdraw_rhi, "КЗ верх", ColorKZ, ANCHOR_LEFT_LOWER);
+         ObjectSetInteger(0, tag + "RHT", OBJPROP_FONTSIZE, active ? 9 : 8);
+         DrawHLineSegment(tag + "RL", tr0, h1b, g_zdraw_rlo, ColorKZ_Support, STYLE_DASH, active ? 2 : 1, "нижняя КЗ диапазона");
+         DrawText(tag + "RLT", h1b, g_zdraw_rlo, "КЗ низ", ColorKZ_Support, ANCHOR_LEFT_UPPER);
+         ObjectSetInteger(0, tag + "RLT", OBJPROP_FONTSIZE, active ? 9 : 8);
+      }
       DrawHLineSegment(tag + "Z0", h0a, h0b, origin, zcol, zs, zw, "");
       DrawHLineSegment(tag + "Z1", h1a, h1b, tip, zcol, zs, zw, "");
       DrawTrendSegment(tag + "ZD", t_origin, origin, t_tip, tip, zcol, zs, zw);
@@ -5744,11 +5774,20 @@ void DrawFib30Line(const MqlRates &rates[])
          RememberZ(g_zprev_have, g_zprev_dir, g_zprev_origin, g_zprev_tip,
                    g_zprev_t0, g_zprev_t1, g_zprev_p30,
                    g_zlive_dir, g_zlive_origin, g_zlive_tip, g_zlive_t0, g_zlive_t1, g_zlive_p30);
+         g_zprev_edge = g_zlive_edge;
+         g_zprev_rhi = g_zlive_rhi;
+         g_zprev_rlo = g_zlive_rlo;
+         g_zprev_rt = g_zlive_rt;
          g_zlive_have = false;
       }
       DeleteObjectsWithPrefix(live);
       if(g_zprev_have)
+      {
+         g_zdraw_rhi = g_zprev_rhi;
+         g_zdraw_rlo = g_zprev_rlo;
+         g_zdraw_rt = g_zprev_rt;
          DrawZBundle(prev, g_zprev_dir, g_zprev_origin, g_zprev_tip, g_zprev_t0, g_zprev_t1, g_zprev_p30, false, t_now, g_zprev_edge);
+      }
       g_fib30_retraced = false;
       g_fib30_have = false;
       DrawModelFibOverlays(rates);
@@ -5771,6 +5810,9 @@ void DrawFib30Line(const MqlRates &rates[])
                 g_zprev_t0, g_zprev_t1, g_zprev_p30,
                 g_zlive_dir, g_zlive_origin, g_zlive_tip, g_zlive_t0, g_zlive_t1, g_zlive_p30);
       g_zprev_edge = g_zlive_edge;
+      g_zprev_rhi = g_zlive_rhi;
+      g_zprev_rlo = g_zlive_rlo;
+      g_zprev_rt = g_zlive_rt;
    }
    if(spent)
    {
@@ -5788,15 +5830,26 @@ void DrawFib30Line(const MqlRates &rates[])
       if(g_zprev_have && g_zprev_t0 == mv.t_origin && g_zprev_dir == mv.dir)
          g_zprev_have = false;
       g_zlive_edge = zone_edge;
+      g_zlive_rhi = mv.z_tip1;
+      g_zlive_rlo = mv.z_corr;
+      g_zlive_rt = mv.z_t_org1;
    }
 
    if(g_zprev_have)
+      g_zdraw_rhi = g_zprev_rhi;
+      g_zdraw_rlo = g_zprev_rlo;
+      g_zdraw_rt = g_zprev_rt;
       DrawZBundle(prev, g_zprev_dir, g_zprev_origin, g_zprev_tip, g_zprev_t0, g_zprev_t1, g_zprev_p30, false, t_now, g_zprev_edge);
    else
       DeleteObjectsWithPrefix(prev);
 
    if(!spent)
+   {
+      g_zdraw_rhi = mv.z_tip1;
+      g_zdraw_rlo = mv.z_corr;
+      g_zdraw_rt = mv.z_t_org1;
       DrawZBundle(live, mv.dir, mv.origin, mv.tip, mv.t_origin, mv.t_tip, price_30, true, t_now, zone_edge);
+   }
 
    g_fib30_origin_t = mv.t_origin;
    g_fib30_price    = price_30;
