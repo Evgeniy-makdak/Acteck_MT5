@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 5.8                                                        |
+//|  ASmart 4.33                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 5.8 — Z с пробоя верхней КЗ диапазона ликвидности"
-#property version   "5.8"
+#property description "ASmart 4.33 — Z от пробоя КЗ, зона 30% от экстремума"
+#property version   "4.33"
 
-#define EA_VERSION "5.8"
+#define EA_VERSION "4.33"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart58";
+input string               CommentPrefix        = "ASmart433";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -705,15 +705,6 @@ datetime g_zlive_t1      = 0;
 double   g_zlive_p30     = 0.0;
 double   g_zlive_edge    = 0.0;
 double   g_zprev_edge    = 0.0;
-double   g_zlive_rhi     = 0.0;
-double   g_zlive_rlo     = 0.0;
-datetime g_zlive_rt      = 0;
-double   g_zprev_rhi     = 0.0;
-double   g_zprev_rlo     = 0.0;
-datetime g_zprev_rt      = 0;
-double   g_zdraw_rhi     = 0.0;
-double   g_zdraw_rlo     = 0.0;
-datetime g_zdraw_rt      = 0;
 bool     g_zprev_have    = false;
 int      g_zprev_dir     = 0;
 double   g_zprev_origin  = 0.0;
@@ -1839,63 +1830,100 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(nr < 40)
       return false;
 
-   // Диапазон ликвидности между двумя КЗ. Z начинается в цене пробитой границы,
-   // а не в минимуме диапазона. Продолжение хода опору не переносит.
-   const int look = MathMin(nr - 2, MathMax(80, StructureLookbackBars));
-   if(look < 12)
+   // Z начинается в пробое диапазона двух КЗ после съёма ликвидности с обеих сторон.
+   // Опора — цена пробитой КЗ. Противоположный экстремум — внешняя граница зоны 30%.
+   double lv[];
+   datetime kt[];
+   int kd[];
+   ArrayResize(lv, 0);
+   ArrayResize(kt, 0);
+   ArrayResize(kd, 0);
+   for(int zi = 0; zi < ArraySize(g_structZones); zi++)
+   {
+      if(g_structZones[zi].kind != SK_KZ || !g_structZones[zi].valid)
+         continue;
+      if(StringLen(g_structZones[zi].tf_tag) > 0 && g_structZones[zi].tf_tag != StructureTFTag())
+         continue;
+      if(g_structZones[zi].pct >= 2.5)
+         continue;
+      const double lvl = g_structZones[zi].imp_start;
+      if(lvl == 0.0)
+         continue;
+      const int n = ArraySize(lv);
+      ArrayResize(lv, n + 1);
+      ArrayResize(kt, n + 1);
+      ArrayResize(kd, n + 1);
+      lv[n] = lvl;
+      kt[n] = g_structZones[zi].t1;
+      kd[n] = g_structZones[zi].direction;
+   }
+   const int nk = ArraySize(lv);
+   if(nk < 2)
       return false;
-   const double gap_min = 20.0 * PointValue();
-   double range_min = rates[look].close * 0.0007;
-   if(range_min < 100.0 * PointValue())
-      range_min = 100.0 * PointValue();
-   const int min_inside = 4;
 
    int best_dir = 0;
-   double best_base = 0.0, best_origin = 0.0, best_tip = 0.0, best_rhi = 0.0, best_rlo = 0.0;
-   datetime best_t = 0, best_ttip = 0, best_ready = 0;
+   double best_origin = 0.0, best_tip = 0.0, best_edge = 0.0;
+   datetime best_t = 0, best_ttip = 0;
+   const double gap_min = 20.0 * PointValue();
 
-   double seg_hi = rates[look].high;
-   double seg_lo = rates[look].low;
-   datetime seg_t0 = rates[look].time;
-   int inside = 1;
-
-   for(int s = look - 1; s >= 0; s--)
+   for(int i = 0; i < nk; i++)
    {
-      const bool up = (rates[s].close > seg_hi);
-      const bool dn = (rates[s].close < seg_lo);
-      if(!up && !dn)
-      {
-         if(rates[s].high > seg_hi) seg_hi = rates[s].high;
-         if(rates[s].low < seg_lo) seg_lo = rates[s].low;
-         inside++;
+      if(kd[i] <= 0)
          continue;
-      }
-      if(inside >= min_inside && (seg_hi - seg_lo) >= range_min)
+      for(int j = 0; j < nk; j++)
       {
-         const int br = up ? 1 : -1;
-         double tip = up ? rates[s].high : rates[s].low;
-         datetime ttip = rates[s].time;
-         for(int k = s; k >= 0; k--)
+         if(kd[j] >= 0)
+            continue;
+         if(lv[j] <= lv[i] + gap_min)
+            continue;
+         const datetime ready = (kt[i] > kt[j]) ? kt[i] : kt[j];
+         bool sw_hi = false, sw_lo = false;
+         double hi = lv[j];
+         double lo = lv[i];
+         int br = 0;
+         datetime tb = 0;
+         double edge = 0.0;
+         for(int s = nr - 1; s >= 1; s--)
          {
-            if(br > 0 && rates[k].high > tip) { tip = rates[k].high; ttip = rates[k].time; }
-            if(br < 0 && rates[k].low < tip) { tip = rates[k].low; ttip = rates[k].time; }
+            if(rates[s].time < ready)
+               continue;
+            if(rates[s].high > hi) hi = rates[s].high;
+            if(rates[s].low < lo) lo = rates[s].low;
+            if(rates[s].high > lv[j]) sw_hi = true;
+            if(rates[s].low < lv[i]) sw_lo = true;
+            if(!sw_hi || !sw_lo)
+               continue;
+            if(rates[s].close < lv[i])
+            { br = -1; tb = rates[s].time; edge = hi; break; }
+            if(rates[s].close > lv[j])
+            { br = 1; tb = rates[s].time; edge = lo; break; }
+         }
+         if(br == 0 || tb <= best_t)
+            continue;
+         double tip = (br < 0) ? lv[i] : lv[j];
+         datetime ttip = tb;
+         const int ib = RateIndexAtTime(rates, tb);
+         if(ib >= 0)
+         {
+            for(int s = ib; s >= 0; s--)
+            {
+               if(br < 0 && rates[s].low < tip)
+               { tip = rates[s].low; ttip = rates[s].time; }
+               if(br > 0 && rates[s].high > tip)
+               { tip = rates[s].high; ttip = rates[s].time; }
+            }
          }
          best_dir = br;
-         best_base = up ? seg_lo : seg_hi;
-         best_origin = up ? seg_hi : seg_lo;
-         best_t = rates[s].time;
-         best_rhi = seg_hi;
-         best_rlo = seg_lo;
-         best_ready = seg_t0;
+         best_origin = (br < 0) ? lv[i] : lv[j];
          best_tip = tip;
+         best_edge = edge;
+         best_t = tb;
          best_ttip = ttip;
       }
-      seg_hi = rates[s].high;
-      seg_lo = rates[s].low;
-      seg_t0 = rates[s].time;
-      inside = 0;
    }
-   const double range = MathAbs(best_tip - best_origin);
+   if(best_dir == 0)
+      return false;
+   const double range = MathAbs(best_edge - best_origin);
    if(range < gap_min || best_t == 0)
       return false;
 
@@ -1909,10 +1937,7 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(m.i_tip < 0)
       m.i_tip = 1;
    m.range = range;
-   m.z_org1 = best_base;
-   m.z_tip1 = best_rhi;
-   m.z_corr = best_rlo;
-   m.z_t_org1 = best_ready;
+   m.z_org1 = best_edge;
    m.has_iki_z = true;
    g_lastImpulseRange = MathAbs(best_tip - best_origin);
    g_lastImpulseDir = m.dir;
@@ -3884,24 +3909,6 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart431_");
    if(StringFind(Prefix(), "ASmart432_") != 0)
       DeleteObjectsByPrefix("ASmart432_");
-   if(StringFind(Prefix(), "ASmart433_") != 0)
-      DeleteObjectsByPrefix("ASmart433_");
-   if(StringFind(Prefix(), "ASmart50_") != 0)
-      DeleteObjectsByPrefix("ASmart50_");
-   if(StringFind(Prefix(), "ASmart51_") != 0)
-      DeleteObjectsByPrefix("ASmart51_");
-   if(StringFind(Prefix(), "ASmart52_") != 0)
-      DeleteObjectsByPrefix("ASmart52_");
-   if(StringFind(Prefix(), "ASmart53_") != 0)
-      DeleteObjectsByPrefix("ASmart53_");
-   if(StringFind(Prefix(), "ASmart54_") != 0)
-      DeleteObjectsByPrefix("ASmart54_");
-   if(StringFind(Prefix(), "ASmart55_") != 0)
-      DeleteObjectsByPrefix("ASmart55_");
-   if(StringFind(Prefix(), "ASmart56_") != 0)
-      DeleteObjectsByPrefix("ASmart56_");
-   if(StringFind(Prefix(), "ASmart57_") != 0)
-      DeleteObjectsByPrefix("ASmart57_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5383,6 +5390,24 @@ void DrawZBundle(const string tag, const int dir,
    const ENUM_LINE_STYLE zs = active ? ((zw > 1) ? STYLE_DASH : STYLE_DOT) : STYLE_DOT;
    const int sec = PeriodSeconds(EffectiveStructureTF());
 
+   datetime t_left = t_origin;
+   datetime t_right = t_tip;
+   if(t_right < t_left)
+   {
+      datetime sw = t_left;
+      t_left = t_right;
+      t_right = sw;
+   }
+   long span = (long)(t_right - t_left);
+   long wing = (long)sec * 16;
+   if(span / 3 > wing) wing = span / 3;
+   if(wing < (long)sec * 8) wing = (long)sec * 8;
+
+   datetime h0a = (datetime)((long)t_origin - wing);
+   datetime h0b = (datetime)((long)t_origin + wing);
+   if(h0b > t_right) h0b = t_right;
+   if(h0a >= h0b) h0a = (datetime)((long)h0b - (long)sec * 4);
+
    datetime h1a = t_tip;
    datetime h1b = t_now;
    if(h1b < h1a) h1b = (datetime)((long)h1a + (long)sec * 4);
@@ -5390,20 +5415,7 @@ void DrawZBundle(const string tag, const int dir,
 
    if(ShowContinuedMoveZ)
    {
-      if(g_zdraw_rhi > g_zdraw_rlo && g_zdraw_rlo > 0.0)
-      {
-         datetime tr0 = g_zdraw_rt;
-         if(tr0 <= 0 || tr0 > t_origin)
-            tr0 = (datetime)((long)t_origin - (long)sec * 8);
-         DrawHLineSegment(tag + "RH", tr0, h1b, g_zdraw_rhi, ColorKZ, STYLE_DASH, active ? 2 : 1, "верхняя КЗ диапазона");
-         DrawText(tag + "RHT", h1b, g_zdraw_rhi, "КЗ верх", ColorKZ, ANCHOR_LEFT_LOWER);
-         ObjectSetInteger(0, tag + "RHT", OBJPROP_FONTSIZE, active ? 9 : 8);
-         DrawHLineSegment(tag + "RL", tr0, h1b, g_zdraw_rlo, ColorKZ_Support, STYLE_DASH, active ? 2 : 1, "нижняя КЗ диапазона");
-         DrawText(tag + "RLT", h1b, g_zdraw_rlo, "КЗ низ", ColorKZ_Support, ANCHOR_LEFT_UPPER);
-         ObjectSetInteger(0, tag + "RLT", OBJPROP_FONTSIZE, active ? 9 : 8);
-      }
-      DrawHLineSegment(tag + "Z0", t_origin, h1b, origin, zcol, STYLE_DOT, active ? 2 : 1,
-                      "опора Z: пробой границы КЗ");
+      DrawHLineSegment(tag + "Z0", h0a, h0b, origin, zcol, zs, zw, "");
       DrawHLineSegment(tag + "Z1", h1a, h1b, tip, zcol, zs, zw, "");
       DrawTrendSegment(tag + "ZD", t_origin, origin, t_tip, tip, zcol, zs, zw);
       ObjectSetInteger(0, tag + "ZD", OBJPROP_BACK, false);
@@ -5435,11 +5447,11 @@ void DrawZBundle(const string tag, const int dir,
       DrawText(tag + "T", t30b, p30, "30", c30, ANCHOR_LEFT_LOWER);
       ObjectSetInteger(0, tag + "T", OBJPROP_FONTSIZE, active ? 9 : 8);
       ObjectSetString(0, tag + "30", OBJPROP_TOOLTIP, "граница зоны 30%");
-      // 30% первого плеча: от начала движения до первой точки Z, зона у начала.
-      const color zfill = (dir > 0) ? C'170,214,240' : C'255,228,150';
+      // Импульс вниз — зона продавца (жёлтая), импульс вверх — зона покупателя (голубая).
+      const color zfill = (dir < 0) ? C'255,228,150' : C'170,214,240';
       DrawRect(tag + "30Z", t_zone, edge, t30b, p30, ToARGB(zfill, active ? 42 : 20), true, true);
       ObjectSetString(0, tag + "30Z", OBJPROP_TOOLTIP,
-                      "зона 30% от начала движения до первой точки Z");
+                      (dir < 0) ? "зона продавца: возврат и выход вниз" : "зона покупателя: возврат и выход вверх");
    }
 }
 
@@ -5730,20 +5742,11 @@ void DrawFib30Line(const MqlRates &rates[])
          RememberZ(g_zprev_have, g_zprev_dir, g_zprev_origin, g_zprev_tip,
                    g_zprev_t0, g_zprev_t1, g_zprev_p30,
                    g_zlive_dir, g_zlive_origin, g_zlive_tip, g_zlive_t0, g_zlive_t1, g_zlive_p30);
-         g_zprev_edge = g_zlive_edge;
-         g_zprev_rhi = g_zlive_rhi;
-         g_zprev_rlo = g_zlive_rlo;
-         g_zprev_rt = g_zlive_rt;
          g_zlive_have = false;
       }
       DeleteObjectsWithPrefix(live);
       if(g_zprev_have)
-      {
-         g_zdraw_rhi = g_zprev_rhi;
-         g_zdraw_rlo = g_zprev_rlo;
-         g_zdraw_rt = g_zprev_rt;
          DrawZBundle(prev, g_zprev_dir, g_zprev_origin, g_zprev_tip, g_zprev_t0, g_zprev_t1, g_zprev_p30, false, t_now, g_zprev_edge);
-      }
       g_fib30_retraced = false;
       g_fib30_have = false;
       DrawModelFibOverlays(rates);
@@ -5751,10 +5754,8 @@ void DrawFib30Line(const MqlRates &rates[])
       return;
    }
 
-   const double leg0 = (mv.z_org1 != 0.0) ? mv.z_org1 : mv.origin;
-   const double zone_edge = (mv.dir > 0) ? MathMin(leg0, mv.origin) : MathMax(leg0, mv.origin);
-   const double span = mv.origin - zone_edge;
-   const double price_30 = zone_edge + (PD_MinCorrectionPct / 100.0) * span;
+   const double zone_edge = (mv.z_org1 != 0.0) ? mv.z_org1 : mv.tip;
+   const double price_30 = zone_edge + (PD_MinCorrectionPct / 100.0) * (mv.origin - zone_edge);
    const double retrace = ContinuedRetracePct(z_rates, mv);
    const bool spent = false;
    mv.retrace_pct = retrace;
@@ -5768,9 +5769,6 @@ void DrawFib30Line(const MqlRates &rates[])
                 g_zprev_t0, g_zprev_t1, g_zprev_p30,
                 g_zlive_dir, g_zlive_origin, g_zlive_tip, g_zlive_t0, g_zlive_t1, g_zlive_p30);
       g_zprev_edge = g_zlive_edge;
-      g_zprev_rhi = g_zlive_rhi;
-      g_zprev_rlo = g_zlive_rlo;
-      g_zprev_rt = g_zlive_rt;
    }
    if(spent)
    {
@@ -5788,28 +5786,15 @@ void DrawFib30Line(const MqlRates &rates[])
       if(g_zprev_have && g_zprev_t0 == mv.t_origin && g_zprev_dir == mv.dir)
          g_zprev_have = false;
       g_zlive_edge = zone_edge;
-      g_zlive_rhi = mv.z_tip1;
-      g_zlive_rlo = mv.z_corr;
-      g_zlive_rt = mv.z_t_org1;
    }
 
    if(g_zprev_have)
-   {
-      g_zdraw_rhi = g_zprev_rhi;
-      g_zdraw_rlo = g_zprev_rlo;
-      g_zdraw_rt = g_zprev_rt;
       DrawZBundle(prev, g_zprev_dir, g_zprev_origin, g_zprev_tip, g_zprev_t0, g_zprev_t1, g_zprev_p30, false, t_now, g_zprev_edge);
-   }
    else
       DeleteObjectsWithPrefix(prev);
 
    if(!spent)
-   {
-      g_zdraw_rhi = mv.z_tip1;
-      g_zdraw_rlo = mv.z_corr;
-      g_zdraw_rt = mv.z_t_org1;
       DrawZBundle(live, mv.dir, mv.origin, mv.tip, mv.t_origin, mv.t_tip, price_30, true, t_now, zone_edge);
-   }
 
    g_fib30_origin_t = mv.t_origin;
    g_fib30_price    = price_30;
