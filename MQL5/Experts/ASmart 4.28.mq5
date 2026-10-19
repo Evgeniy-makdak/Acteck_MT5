@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.27                                                       |
+//|  ASmart 4.28                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.27 — хвост RSI как у Снайпера, с зазором от числа"
-#property version   "4.27"
+#property description "ASmart 4.28 — без служебных подписей «против хода» и «страх» у сделки"
+#property version   "4.28"
 
-#define EA_VERSION "4.27"
+#define EA_VERSION "4.28"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart427";
+input string               CommentPrefix        = "ASmart428";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -3890,6 +3890,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart425_");
    if(StringFind(Prefix(), "ASmart426_") != 0)
       DeleteObjectsByPrefix("ASmart426_");
+   if(StringFind(Prefix(), "ASmart427_") != 0)
+      DeleteObjectsByPrefix("ASmart427_");
    Comment("");
    ChartRedraw(0);
 }
@@ -7823,14 +7825,10 @@ bool ExecuteSignal(const string sig, const int direction, const MqlRates &signal
    }
 
    string chart_note = (direction > 0) ? "покупка" : "продажа";
-   if(g_lastImpulseDir != 0)
-      chart_note += (direction == g_lastImpulseDir) ? " | по ходу" : " | против хода";
    if(g_sightActive && g_sightDirection != 0 && g_sightDirection != direction)
       chart_note += " | против прицела";
    if(!fear_ok)
       chart_note += " | индекс страха запрещает";
-   else
-      chart_note += StringFormat(" | страх %d", fear);
 
    VisualizeSignal(sig, direction, vis_bar, entry, sl, tp, status, chart_note);
 

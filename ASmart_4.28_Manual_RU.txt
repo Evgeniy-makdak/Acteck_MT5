@@ -1,13 +1,13 @@
-ASmart 4.27 — краткий мануал (RU)
+ASmart 4.28 — краткий мануал (RU)
 ================================
 
-Файл эксперта: MQL5/Experts/ASmart 4.27.mq5
-Префикс: ASmart427_
+Файл эксперта: MQL5/Experts/ASmart 4.28.mq5
+Префикс: ASmart428_
 Пресеты: MQL5/Presets/Acteck_v4.21_*.set (имена без смены)
 
 1. Установка
-   - F7: ASmart 4.27.mq5
-   - Снять старый EA → навесить 4.27 + пресет пары
+   - F7: ASmart 4.28.mq5
+   - Снять старый EA → навесить 4.28 + пресет пары
 
 2. Таймфреймы (критично)
    - StructureTF = M15 — разметка КЗ и Z ВСЕГДА с M15
@@ -36,4 +36,4 @@ ASmart 4.27 — краткий мануал (RU)
    - SafeSplitDeals=true → Safe1R + Run2R
 
 7. Документы
-   - UserGuide_ASmart_4.27_RU.txt, CHANGES_V4.23.md
+   - UserGuide_ASmart_4.28_RU.txt, CHANGES_V4.23.md
