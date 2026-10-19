@@ -1,6 +1,6 @@
-Compile MQL5/Experts/ASmart 5.6.mq5 (F7)
-Карточка: UserGuide_ASmart_5.6_RU.txt
-Мануал: ASmart_5.6_Manual_RU.pdf / .txt
+Compile MQL5/Experts/ASmart 5.7.mq5 (F7)
+Карточка: UserGuide_ASmart_5.7_RU.txt
+Мануал: ASmart_5.7_Manual_RU.pdf / .txt
 Пресеты: MQL5/Presets/Acteck_v4.21_*.set
 Изменения: CHANGES_V4.23.md
 КЗ/Z: StructureTF=M15 (всегда), прицел BB100 с H1, рабочий график обычно M5

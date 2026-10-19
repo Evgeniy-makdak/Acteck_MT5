@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 5.6                                                        |
+//|  ASmart 5.7                                                        |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 5.6 — Z от последней коррекции безоткатного хода на M15"
-#property version   "5.6"
+#property description "ASmart 5.7 — зона 30% у начала хода, Z от лоу первой точки"
+#property version   "5.7"
 
-#define EA_VERSION "5.6"
+#define EA_VERSION "5.7"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart56";
+input string               CommentPrefix        = "ASmart57";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -1845,11 +1845,13 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(look < 12)
       return false;
    const double gap_min = 20.0 * PointValue();
-   double min_rev = rates[look].close * 0.0006;
-   if(min_rev < 80.0 * PointValue())
-      min_rev = 80.0 * PointValue();
+   // Порог выше короткой паузы: более высокий лоу внутри хода опору не переносит.
+   double min_rev = rates[look].close * 0.0010;
+   if(min_rev < 120.0 * PointValue())
+      min_rev = 120.0 * PointValue();
 
    int best_dir = 1;
+   double best_base = rates[look].low;
    double best_origin = rates[look].low;
    double best_tip = rates[look].high;
    double best_rhi = rates[look].high;
@@ -1894,6 +1896,8 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
             }
             if(hi - pb_px >= min_rev)
             {
+               if(MathAbs(best_origin - pb_px) >= gap_min)
+                  best_base = best_origin;
                best_origin = pb_px;
                best_t = pb_t;
                best_rlo = pb_px;
@@ -1906,6 +1910,7 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
             else if(lo < best_origin && (best_origin - lo) >= min_rev)
             {
                best_dir = -1;
+               best_base = best_tip;
                best_origin = best_tip;
                best_t = best_ttip;
                best_rhi = best_tip;
@@ -1945,6 +1950,8 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
             }
             if(pb_px - lo >= min_rev)
             {
+               if(MathAbs(best_origin - pb_px) >= gap_min)
+                  best_base = best_origin;
                best_origin = pb_px;
                best_t = pb_t;
                best_rhi = pb_px;
@@ -1957,6 +1964,7 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
             else if(hi > best_origin && (hi - best_origin) >= min_rev)
             {
                best_dir = 1;
+               best_base = best_tip;
                best_origin = best_tip;
                best_t = best_ttip;
                best_rlo = best_tip;
@@ -1983,7 +1991,7 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(m.i_tip < 0)
       m.i_tip = 1;
    m.range = range;
-   m.z_org1 = best_origin;
+   m.z_org1 = best_base;
    m.z_tip1 = best_rhi;
    m.z_corr = best_rlo;
    m.z_t_org1 = best_ready;
@@ -3972,6 +3980,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart54_");
    if(StringFind(Prefix(), "ASmart55_") != 0)
       DeleteObjectsByPrefix("ASmart55_");
+   if(StringFind(Prefix(), "ASmart56_") != 0)
+      DeleteObjectsByPrefix("ASmart56_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5505,11 +5515,11 @@ void DrawZBundle(const string tag, const int dir,
       DrawText(tag + "T", t30b, p30, "30", c30, ANCHOR_LEFT_LOWER);
       ObjectSetInteger(0, tag + "T", OBJPROP_FONTSIZE, active ? 9 : 8);
       ObjectSetString(0, tag + "30", OBJPROP_TOOLTIP, "граница зоны 30%");
-      // 30% считается от экстремума хода: у максимума зона продавца, у минимума — покупателя.
-      const color zfill = (dir > 0) ? C'255,228,150' : C'170,214,240';
+      // 30% первого плеча: от начала движения до первой точки Z, зона у начала.
+      const color zfill = (dir > 0) ? C'170,214,240' : C'255,228,150';
       DrawRect(tag + "30Z", t_zone, edge, t30b, p30, ToARGB(zfill, active ? 42 : 20), true, true);
       ObjectSetString(0, tag + "30Z", OBJPROP_TOOLTIP,
-                      (dir > 0) ? "зона продавца: от максимума до 30%" : "зона покупателя: от минимума до 30%");
+                      "зона 30% от начала движения до первой точки Z");
    }
 }
 
@@ -5821,8 +5831,10 @@ void DrawFib30Line(const MqlRates &rates[])
       return;
    }
 
-   const double zone_edge = mv.tip;
-   const double price_30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (mv.origin - mv.tip);
+   const double leg0 = (mv.z_org1 != 0.0) ? mv.z_org1 : mv.origin;
+   const double zone_edge = (mv.dir > 0) ? MathMin(leg0, mv.origin) : MathMax(leg0, mv.origin);
+   const double span = mv.origin - zone_edge;
+   const double price_30 = zone_edge + (PD_MinCorrectionPct / 100.0) * span;
    const double retrace = ContinuedRetracePct(z_rates, mv);
    const bool spent = false;
    mv.retrace_pct = retrace;

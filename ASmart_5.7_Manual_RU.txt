@@ -1,13 +1,13 @@
-ASmart 5.6 — краткий мануал (RU)
+ASmart 5.7 — краткий мануал (RU)
 ================================
 
-Файл эксперта: MQL5/Experts/ASmart 5.6.mq5
-Префикс: ASmart56_
+Файл эксперта: MQL5/Experts/ASmart 5.7.mq5
+Префикс: ASmart57_
 Пресеты: MQL5/Presets/Acteck_v4.21_*.set (имена без смены)
 
 1. Установка
-   - F7: ASmart 5.6.mq5
-   - Снять старый EA → навесить 5.6 + пресет пары
+   - F7: ASmart 5.7.mq5
+   - Снять старый EA → навесить 5.7 + пресет пары
 
 2. Таймфреймы (критично)
    - StructureTF = M15 — разметка КЗ и Z ВСЕГДА с M15
@@ -36,7 +36,7 @@ ASmart 5.6 — краткий мануал (RU)
    - SafeSplitDeals=true → Safe1R + Run2R
 
 7. Документы
-   - UserGuide_ASmart_5.6_RU.txt, CHANGES_V4.23.md
+   - UserGuide_ASmart_5.7_RU.txt, CHANGES_V4.23.md
 
 8. Разворот после диапазона двух КЗ
    - Синяя «КЗ верх» и зелёная «КЗ низ» — границы диапазона
