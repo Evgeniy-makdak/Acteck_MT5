@@ -5836,10 +5836,12 @@ void DrawFib30Line(const MqlRates &rates[])
    }
 
    if(g_zprev_have)
+   {
       g_zdraw_rhi = g_zprev_rhi;
       g_zdraw_rlo = g_zprev_rlo;
       g_zdraw_rt = g_zprev_rt;
       DrawZBundle(prev, g_zprev_dir, g_zprev_origin, g_zprev_tip, g_zprev_t0, g_zprev_t1, g_zprev_p30, false, t_now, g_zprev_edge);
+   }
    else
       DeleteObjectsWithPrefix(prev);
 
