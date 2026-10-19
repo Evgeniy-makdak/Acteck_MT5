@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.25                                                       |
+//|  ASmart 4.26                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.25 — Z держит закрытое плечо, хвост RSI у числа"
-#property version   "4.25"
+#property description "ASmart 4.26 — Z от пробоя предыдущего экстремума"
+#property version   "4.26"
 
-#define EA_VERSION "4.25"
+#define EA_VERSION "4.26"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart425";
+input string               CommentPrefix        = "ASmart426";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -1783,6 +1783,25 @@ bool SegmentExtreme(const SBaseEvent &ev[], const int from, const int to, const 
    return true;
 }
 
+// Экстремум предыдущего плеча той же стороны: хай, который пробивает рост,
+// или лой, который пробивает падение. Это не минимум/максимум коррекции.
+bool PreviousSameSideExtreme(const SBaseEvent &ev[], const int before, const int dir,
+                             double &price, datetime &t, int &rate_idx)
+{
+   if(before <= 0 || dir == 0)
+      return false;
+   int i = before - 1;
+   while(i >= 0 && ev[i].dir != dir)
+      i--;
+   if(i < 0)
+      return false;
+   int seg_end = i;
+   int seg_start = i;
+   while(seg_start > 0 && ev[seg_start - 1].dir == dir)
+      seg_start--;
+   return SegmentExtreme(ev, seg_start, seg_end, dir, price, t, rate_idx);
+}
+
 bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
 {
    m.valid = false;
@@ -1838,30 +1857,65 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(!SegmentExtreme(ev, prev_start, prev_end, prev_dir, prev_tip, t_prev, i_prev))
       return false;
 
-   // Z — последнее ЗАКРЫТОЕ плечо. Последний участок ещё открыт:
-   // на золоте это незакрытое падение, поэтому сверху остаётся прежнее плечо;
-   // на евро откат после минимума не переворачивает уже закрытое нисходящее Z.
-   double prev_origin = ev[prev_start].extreme;
-   datetime t_prev_origin = ev[prev_start].time;
-   if(prev_start > 0)
+   // Z — последнее ЗАКРЫТОЕ плечо. Открытый правый участок его не заменяет.
+   // Начало диагонали — не экстремум коррекции (лой Франкфурта), а цена
+   // предыдущего хая/лоя в баре, где импульс этот уровень пересёк.
+   double broken = 0.0;
+   datetime t_broken = 0;
+   int i_broken = 0;
+   if(!PreviousSameSideExtreme(ev, prev_start, prev_dir, broken, t_broken, i_broken))
+      return false;
+   if(prev_dir > 0 && broken >= prev_tip)
+      return false;
+   if(prev_dir < 0 && broken <= prev_tip)
+      return false;
+
+   int c_end = prev_start - 1;
+   int c_start = c_end;
+   while(c_start > 0 && ev[c_start - 1].dir == ev[c_end].dir)
+      c_start--;
+   double corr_px = 0.0;
+   datetime t_corr = 0;
+   int i_corr = 0;
+   if(!SegmentExtreme(ev, c_start, c_end, ev[c_end].dir, corr_px, t_corr, i_corr))
+      return false;
+   if(i_broken < 0 || i_corr < 0 || t_broken <= 0)
+      return false;
+   if(prev_dir > 0 && broken <= corr_px)
+      return false;
+   if(prev_dir < 0 && broken >= corr_px)
+      return false;
+
+   int i_from = RateIndexAtTime(rates, t_corr);
+   int i_to = RateIndexAtTime(rates, t_prev);
+   if(i_to < 0)
+      i_to = i_prev;
+   if(i_from < 0)
+      i_from = i_to;
+   if(i_from < i_to)
    {
-      int b_end = prev_start - 1;
-      int b_start = b_end;
-      while(b_start > 0 && ev[b_start - 1].dir == ev[b_end].dir)
-         b_start--;
-      double b_px = 0.0;
-      datetime b_t = 0;
-      int b_i = 0;
-      if(SegmentExtreme(ev, b_start, b_end, ev[b_end].dir, b_px, b_t, b_i))
-      {
-         prev_origin = b_px;
-         t_prev_origin = b_t;
-      }
+      const int sw = i_from;
+      i_from = i_to;
+      i_to = sw;
    }
 
+   int i_cross = -1;
+   const double eps = PointValue();
+   for(int i = i_from; i >= i_to && i >= 0; i--)
+   {
+      if(rates[i].time <= t_broken)
+         continue;
+      if(prev_dir > 0 && rates[i].high + eps >= broken)
+      { i_cross = i; break; }
+      if(prev_dir < 0 && rates[i].low - eps <= broken)
+      { i_cross = i; break; }
+   }
+   if(i_cross < 0 || i_cross >= nr)
+      return false;
+
    const int dir = prev_dir;
-   const double origin = prev_origin;
-   const datetime t_origin = t_prev_origin;
+   const double origin = broken;
+   const datetime t_origin = rates[i_cross].time;
    const double tip = prev_tip;
    const datetime t_tip = t_prev;
    int i_tip = i_prev;
@@ -3832,6 +3886,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart423_");
    if(StringFind(Prefix(), "ASmart424_") != 0)
       DeleteObjectsByPrefix("ASmart424_");
+   if(StringFind(Prefix(), "ASmart425_") != 0)
+      DeleteObjectsByPrefix("ASmart425_");
    Comment("");
    ChartRedraw(0);
 }
@@ -4904,8 +4960,8 @@ int HistoryLenFear()
 
 void DrawFearSparkline(const color clr)
 {
-   const int W = 110;
-   const int H = 36;
+   const int W = 88;
+   const int H = 26;
    const int n = MathMin(48, MathMax(12, HistoryLenFear()));
    const string name = Prefix() + "FEAR_SPARK";
 
@@ -4918,8 +4974,13 @@ void DrawFearSparkline(const color clr)
    if(got < 8)
       return;
 
-   if(!g_fearSparkOn)
+   if(!g_fearSparkOn || (int)ObjectGetInteger(0, name, OBJPROP_XSIZE) != W)
    {
+      if(g_fearSparkOn)
+      {
+         g_fearSpark.Destroy();
+         g_fearSparkOn = false;
+      }
       if(ObjectFind(0, name) >= 0)
          ObjectDelete(0, name);
       if(!g_fearSpark.CreateBitmapLabel(name, 0, 0, W, H, COLOR_FORMAT_XRGB_NOALPHA))
@@ -4927,8 +4988,9 @@ void DrawFearSparkline(const color clr)
       g_fearSparkOn = true;
    }
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 78);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 22);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 72);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 38);
    ObjectSetInteger(0, name, OBJPROP_BACK, false);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);

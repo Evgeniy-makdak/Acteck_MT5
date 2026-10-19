@@ -1,6 +1,6 @@
 # Алгоритм принятия решений Acteck v1.09 (подробно)
 
-Документ актуализирован под `MQL5/Experts/ASmart 4.25.mq5` (якорь A/B/C = ИКИ-КЗ с **M15**). Исторически описан также путь Acteck CZ:
+Документ актуализирован под `MQL5/Experts/ASmart 4.26.mq5` (якорь A/B/C = ИКИ-КЗ с **M15**). Исторически описан также путь Acteck CZ:
 - когда формируется сигнал,
 - когда он блокируется,
 - как рассчитываются SL/TP,
@@ -29,7 +29,7 @@
 3. `ProcessActiveZone` — A/B; `ProcessBrokenZone` — C; `TryPDT1EntryFromRM` — доп. B от Z/«30».
 4. `ManagePositions` — BE / трейл / partial / время.
 
-## 3. Как строится зона (ASmart 4.25 — КЗ с M15)
+## 3. Как строится зона (ASmart 4.26 — КЗ с M15)
 
 **По умолчанию** (`UseIKI_KZ_ForSignals=true`, `UseLegacyCZSignals=false`):
 
