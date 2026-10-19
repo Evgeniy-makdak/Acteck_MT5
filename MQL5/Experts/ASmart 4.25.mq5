@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.24                                                       |
+//|  ASmart 4.25                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.24 — Z и 30% тускнеют после коррекции 50%"
-#property version   "4.24"
+#property description "ASmart 4.25 — Z держит закрытое плечо, хвост RSI у числа"
+#property version   "4.25"
 
-#define EA_VERSION "4.24"
+#define EA_VERSION "4.25"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart424";
+input string               CommentPrefix        = "ASmart425";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -1833,12 +1833,14 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    int i_last = 0, i_prev = 0;
    if(!SegmentExtreme(ev, seg_start, seg_end, last_dir, last_tip, t_last, i_last))
       return false;
+   if(t_last <= 0 || i_last < 0 || last_tip != last_tip)
+      return false;
    if(!SegmentExtreme(ev, prev_start, prev_end, prev_dir, prev_tip, t_prev, i_prev))
       return false;
 
-   // Размер последнего плеча — от экстремума предыдущего участка до своего кончика.
-   const double last_range = MathAbs(prev_tip - last_tip);
-   double prev_range = last_range;
+   // Z — последнее ЗАКРЫТОЕ плечо. Последний участок ещё открыт:
+   // на золоте это незакрытое падение, поэтому сверху остаётся прежнее плечо;
+   // на евро откат после минимума не переворачивает уже закрытое нисходящее Z.
    double prev_origin = ev[prev_start].extreme;
    datetime t_prev_origin = ev[prev_start].time;
    if(prev_start > 0)
@@ -1854,30 +1856,15 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
       {
          prev_origin = b_px;
          t_prev_origin = b_t;
-         prev_range = MathAbs(prev_tip - b_px);
       }
    }
-   // Откат короче предыдущего импульса не заменяет Z.
-   const bool pullback = (last_range + PointValue() < prev_range);
 
-   int dir = pullback ? prev_dir : last_dir;
-   double origin = pullback ? prev_origin : prev_tip;
-   datetime t_origin = pullback ? t_prev_origin : t_prev;
-   double tip = pullback ? prev_tip : last_tip;
-   datetime t_tip = pullback ? t_prev : t_last;
-   int i_tip = pullback ? i_prev : i_last;
-
-   if(i_tip < 0)
-      i_tip = RateIndexAtTime(rates, t_tip);
-   if(i_tip < 0)
-      i_tip = 1;
-   for(int i = i_tip; i >= 0; i--)
-   {
-      if(dir < 0 && rates[i].low < tip)
-      { tip = rates[i].low; t_tip = rates[i].time; i_tip = i; }
-      if(dir > 0 && rates[i].high > tip)
-      { tip = rates[i].high; t_tip = rates[i].time; i_tip = i; }
-   }
+   const int dir = prev_dir;
+   const double origin = prev_origin;
+   const datetime t_origin = t_prev_origin;
+   const double tip = prev_tip;
+   const datetime t_tip = t_prev;
+   int i_tip = i_prev;
 
    const double range = MathAbs(origin - tip);
    if(range < 20.0 * PointValue() || t_origin == t_tip)
@@ -3843,6 +3830,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart40_");
    if(StringFind(Prefix(), "ASmart423_") != 0)
       DeleteObjectsByPrefix("ASmart423_");
+   if(StringFind(Prefix(), "ASmart424_") != 0)
+      DeleteObjectsByPrefix("ASmart424_");
    Comment("");
    ChartRedraw(0);
 }
@@ -4931,31 +4920,36 @@ void DrawFearSparkline(const color clr)
 
    if(!g_fearSparkOn)
    {
-      if(!g_fearSpark.CreateBitmapLabel(name, 0, 0, W, H, COLOR_FORMAT_ARGB_NORMALIZE))
+      if(ObjectFind(0, name) >= 0)
+         ObjectDelete(0, name);
+      if(!g_fearSpark.CreateBitmapLabel(name, 0, 0, W, H, COLOR_FORMAT_XRGB_NOALPHA))
          return;
       g_fearSparkOn = true;
    }
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 62);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 28);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 78);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 22);
    ObjectSetInteger(0, name, OBJPROP_BACK, false);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
    ObjectSetInteger(0, name, OBJPROP_ZORDER, 210);
 
-   g_fearSpark.Erase(0);
+   const color bg = (color)ChartGetInteger(0, CHART_COLOR_BACKGROUND);
+   g_fearSpark.Erase(ColorToARGB(bg, 255));
    const uint col = ColorToARGB(clr, 255);
    const int pts = got;
    for(int k = pts - 1; k > 0; k--)
    {
       const int x1 = 2 + (int)((pts - 1 - k) * (W - 6) / (pts - 1));
       const int x2 = 2 + (int)((pts - k) * (W - 6) / (pts - 1));
-      int y1 = (int)MathRound((100.0 - rsi[k]) / 100.0 * (H - 6)) + 3;
-      int y2 = (int)MathRound((100.0 - rsi[k - 1]) / 100.0 * (H - 6)) + 3;
-      if(y1 < 1) y1 = 1;
-      if(y2 < 1) y2 = 1;
-      if(y1 > H - 2) y1 = H - 2;
-      if(y2 > H - 2) y2 = H - 2;
+      int y1 = (int)MathRound((100.0 - rsi[k]) / 100.0 * (H - 8)) + 4;
+      int y2 = (int)MathRound((100.0 - rsi[k - 1]) / 100.0 * (H - 8)) + 4;
+      if(y1 < 2) y1 = 2;
+      if(y2 < 2) y2 = 2;
+      if(y1 > H - 3) y1 = H - 3;
+      if(y2 > H - 3) y2 = H - 3;
       g_fearSpark.Line(x1, y1, x2, y2, col);
+      g_fearSpark.Line(x1, y1 + 1, x2, y2 + 1, col);
    }
    g_fearSpark.Update();
 }
