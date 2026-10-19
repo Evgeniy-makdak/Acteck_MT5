@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.33                                                       |
+//|  ASmart 5.0                                                        |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.33 — Z от пробоя КЗ, зона 30% от экстремума"
-#property version   "4.33"
+#property description "ASmart 5.0 — Z от пробоя КЗ, зона 30% от экстремума"
+#property version   "5.0"
 
-#define EA_VERSION "4.33"
+#define EA_VERSION "5.0"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart433";
+input string               CommentPrefix        = "ASmart50";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -3909,6 +3909,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart431_");
    if(StringFind(Prefix(), "ASmart432_") != 0)
       DeleteObjectsByPrefix("ASmart432_");
+   if(StringFind(Prefix(), "ASmart433_") != 0)
+      DeleteObjectsByPrefix("ASmart433_");
    Comment("");
    ChartRedraw(0);
 }
