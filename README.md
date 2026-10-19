@@ -1,6 +1,6 @@
-# ASmart 4.23 (MT5)
+# ASmart 4.24 (MT5)
 
-`MQL5/Experts/ASmart 4.23.mq5` — префикс объектов `ASmart423_`
+`MQL5/Experts/ASmart 4.24.mq5` — префикс объектов `ASmart424_`
 
 ## Критично: КЗ и Z с M15
 
@@ -24,5 +24,6 @@
 
 **Сейф:** `SafeSplitDeals=true` — TP 1R + TP 2R.
 
-Снять EA → F7 → **ASmart 4.23**. Пресеты: `MQL5/Presets/Acteck_v4.21_*.set`.  
-Карточка: `UserGuide_ASmart_4.23_RU.txt`. Изменения: `CHANGES_V4.23.md`.
+Снять EA → F7 → **ASmart 4.24**. Пресеты: `MQL5/Presets/Acteck_v4.21_*.set`.  
+Карточка: `UserGuide_ASmart_4.23_RU.txt`. Изменения: `CHANGES_V4.23.md`.  
+После коррекции 50% линия «30» оранжевая, Z тусклое; ярким остаётся только актуальное плечо.

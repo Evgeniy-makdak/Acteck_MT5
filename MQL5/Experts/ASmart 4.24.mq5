@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.23                                                       |
+//|  ASmart 4.24                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.23 — КЗ/Z с M15; прицел = BB(100); квадрат РМ после выхода и возврата"
-#property version   "4.23"
+#property description "ASmart 4.24 — Z и 30% тускнеют после коррекции 50%"
+#property version   "4.24"
 
-#define EA_VERSION "4.23"
+#define EA_VERSION "4.24"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart423";
+input string               CommentPrefix        = "ASmart424";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -689,6 +689,20 @@ datetime g_fib30_t1       = 0;
 datetime g_fib30_t2       = 0;
 bool     g_fib30_have     = false;
 bool     g_fib30_retraced = false;
+bool     g_zlive_have    = false;
+int      g_zlive_dir     = 0;
+double   g_zlive_origin  = 0.0;
+double   g_zlive_tip     = 0.0;
+datetime g_zlive_t0      = 0;
+datetime g_zlive_t1      = 0;
+double   g_zlive_p30     = 0.0;
+bool     g_zprev_have    = false;
+int      g_zprev_dir     = 0;
+double   g_zprev_origin  = 0.0;
+double   g_zprev_tip     = 0.0;
+datetime g_zprev_t0      = 0;
+datetime g_zprev_t1      = 0;
+double   g_zprev_p30     = 0.0;
 
 // Forward declarations (MQL5: call sites before definitions)
 string ShortTFName(const ENUM_TIMEFRAMES tf);
@@ -1749,8 +1763,26 @@ int RateIndexAtTime(const MqlRates &rates[], const datetime t)
    return -1;
 }
 
-// Графический Z как у Снайпера: ОДНО последнее плечо зигзага на M15.
-// Кончик дотягивается до живого экстремума. Старые хаи (другое плечо) не склеиваются.
+// Плечо Z по базовым свечам M15 (тот же зигзаг, что у КЗ), не по фракталу SpeedPreset.
+// Иначе глубина 8/60 на M15 оставляет хай Азии и выбрасывает более поздний нижний хай.
+bool SegmentExtreme(const SBaseEvent &ev[], const int from, const int to, const int dir,
+                    double &price, datetime &t, int &rate_idx)
+{
+   if(from < 0 || to < from)
+      return false;
+   price = ev[from].extreme;
+   t = ev[from].time;
+   rate_idx = ev[from].rate_idx;
+   for(int k = from; k <= to; k++)
+   {
+      if(dir < 0 && ev[k].extreme < price)
+      { price = ev[k].extreme; t = ev[k].time; rate_idx = ev[k].rate_idx; }
+      if(dir > 0 && ev[k].extreme > price)
+      { price = ev[k].extreme; t = ev[k].time; rate_idx = ev[k].rate_idx; }
+   }
+   return true;
+}
+
 bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
 {
    m.valid = false;
@@ -1770,89 +1802,85 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(nr < 40)
       return false;
 
-   SPivot swings[];
-   if(!BuildSwingPoints(rates, swings, 64))
+   SBaseBar bases[];
+   const int look = MathMin(nr - 1, MathMax(80, StructureLookbackBars));
+   if(BuildBaseBars(rates, look, bases) < 6)
       return false;
-   const int ns = ArraySize(swings);
-   if(ns < 2)
+   SBaseEvent ev[];
+   if(ExpandBaseEvents(bases, rates, ev) < 4)
+      return false;
+   const int ne = ArraySize(ev);
+
+   int seg_end = ne - 1;
+   int seg_start = seg_end;
+   while(seg_start > 0 && ev[seg_start - 1].dir == ev[seg_end].dir)
+      seg_start--;
+   if(seg_start < 1)
       return false;
 
-   double atr = 0.0;
-   int ac = 0;
-   for(int i = 1; i <= 14 && i < nr; i++)
+   int prev_end = seg_start - 1;
+   int prev_start = prev_end;
+   while(prev_start > 0 && ev[prev_start - 1].dir == ev[prev_end].dir)
+      prev_start--;
+
+   const int last_dir = ev[seg_end].dir;
+   const int prev_dir = ev[prev_end].dir;
+   if(last_dir == 0 || prev_dir == 0 || last_dir == prev_dir)
+      return false;
+
+   double last_tip = 0.0, prev_tip = 0.0;
+   datetime t_last = 0, t_prev = 0;
+   int i_last = 0, i_prev = 0;
+   if(!SegmentExtreme(ev, seg_start, seg_end, last_dir, last_tip, t_last, i_last))
+      return false;
+   if(!SegmentExtreme(ev, prev_start, prev_end, prev_dir, prev_tip, t_prev, i_prev))
+      return false;
+
+   // Размер последнего плеча — от экстремума предыдущего участка до своего кончика.
+   const double last_range = MathAbs(prev_tip - last_tip);
+   double prev_range = last_range;
+   double prev_origin = ev[prev_start].extreme;
+   datetime t_prev_origin = ev[prev_start].time;
+   if(prev_start > 0)
    {
-      atr += MathMax(rates[i].high, rates[i - 1].close) - MathMin(rates[i].low, rates[i - 1].close);
-      ac++;
-   }
-   if(ac > 0)
-      atr /= (double)ac;
-   const double min_need = (atr > 0.0) ? MathMax(20.0 * PointValue(), 0.45 * atr) : (30.0 * PointValue());
-
-   const int i_last = RateIndexAtTime(rates, swings[ns - 1].t);
-   const int i_prev = RateIndexAtTime(rates, swings[ns - 2].t);
-   if(i_last < 0 || i_prev < 0 || swings[ns - 1].type == swings[ns - 2].type)
-      return false;
-
-   int dir = 0;
-   double origin = 0.0, tip = 0.0;
-   datetime t_origin = 0, t_tip = 0;
-   int i_tip = i_last;
-
-   if(swings[ns - 1].type > 0)
-   {
-      // Последний подтверждённый свинг — хай. Если от него уже ушли вниз, Z = этот хай → живой лой.
-      double lo = swings[ns - 1].p;
-      int ilo = i_last;
-      for(int i = 0; i <= i_last; i++)
+      int b_end = prev_start - 1;
+      int b_start = b_end;
+      while(b_start > 0 && ev[b_start - 1].dir == ev[b_end].dir)
+         b_start--;
+      double b_px = 0.0;
+      datetime b_t = 0;
+      int b_i = 0;
+      if(SegmentExtreme(ev, b_start, b_end, ev[b_end].dir, b_px, b_t, b_i))
       {
-         if(rates[i].low < lo)
-         { lo = rates[i].low; ilo = i; }
-      }
-      if(swings[ns - 1].p - lo >= min_need)
-      {
-         dir = -1;
-         origin = swings[ns - 1].p;
-         t_origin = swings[ns - 1].t;
-         tip = lo;
-         t_tip = rates[ilo].time;
-         i_tip = ilo;
-      }
-      else
-      {
-         dir = 1;
-         origin = swings[ns - 2].p;
-         t_origin = swings[ns - 2].t;
-         tip = swings[ns - 1].p;
-         t_tip = swings[ns - 1].t;
-         i_tip = i_last;
-         for(int i = 0; i < i_last; i++)
-         {
-            if(rates[i].high > tip)
-            { tip = rates[i].high; t_tip = rates[i].time; i_tip = i; }
-         }
+         prev_origin = b_px;
+         t_prev_origin = b_t;
+         prev_range = MathAbs(prev_tip - b_px);
       }
    }
-   else
+   // Откат короче предыдущего импульса не заменяет Z.
+   const bool pullback = (last_range + PointValue() < prev_range);
+
+   int dir = pullback ? prev_dir : last_dir;
+   double origin = pullback ? prev_origin : prev_tip;
+   datetime t_origin = pullback ? t_prev_origin : t_prev;
+   double tip = pullback ? prev_tip : last_tip;
+   datetime t_tip = pullback ? t_prev : t_last;
+   int i_tip = pullback ? i_prev : i_last;
+
+   if(i_tip < 0)
+      i_tip = RateIndexAtTime(rates, t_tip);
+   if(i_tip < 0)
+      i_tip = 1;
+   for(int i = i_tip; i >= 0; i--)
    {
-      // Последний свинг — лой: Z остаётся хай→этот лой, пока не появится новый хай-свинг.
-      // Откат цены сам по себе плечо не переворачивает (как на скрине Снайпера).
-      dir = -1;
-      origin = swings[ns - 2].p;
-      t_origin = swings[ns - 2].t;
-      tip = swings[ns - 1].p;
-      t_tip = swings[ns - 1].t;
-      i_tip = i_last;
-      for(int i = 0; i < i_last; i++)
-      {
-         if(rates[i].low < tip)
-         { tip = rates[i].low; t_tip = rates[i].time; i_tip = i; }
-      }
+      if(dir < 0 && rates[i].low < tip)
+      { tip = rates[i].low; t_tip = rates[i].time; i_tip = i; }
+      if(dir > 0 && rates[i].high > tip)
+      { tip = rates[i].high; t_tip = rates[i].time; i_tip = i; }
    }
 
-   if(dir == 0 || t_origin == t_tip)
-      return false;
    const double range = MathAbs(origin - tip);
-   if(range < min_need)
+   if(range < 20.0 * PointValue() || t_origin == t_tip)
       return false;
 
    m.valid = true;
@@ -3813,6 +3841,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart39_");
    if(StringFind(Prefix(), "ASmart40_") != 0)
       DeleteObjectsByPrefix("ASmart40_");
+   if(StringFind(Prefix(), "ASmart423_") != 0)
+      DeleteObjectsByPrefix("ASmart423_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5181,6 +5211,119 @@ void Fib30HistoryPurge(const bool have_live)
    }
 }
 
+double ContinuedRetracePct(const MqlRates &rates[], const SContinuedMove &mv)
+{
+   if(!mv.valid || mv.range <= PointValue())
+      return 0.0;
+   const int nr = ArraySize(rates);
+   int i_tip = mv.i_tip;
+   if(i_tip < 0 || i_tip >= nr)
+      i_tip = RateIndexAtTime(rates, mv.t_tip);
+   if(i_tip < 0)
+      i_tip = (nr > 1) ? 1 : 0;
+   double ext = mv.tip;
+   for(int i = i_tip; i >= 0; i--)
+   {
+      if(mv.dir < 0 && rates[i].high > ext)
+         ext = rates[i].high;
+      if(mv.dir > 0 && rates[i].low < ext)
+         ext = rates[i].low;
+   }
+   if(nr > 0)
+   {
+      if(mv.dir < 0)
+         ext = MathMax(ext, rates[0].close);
+      else
+         ext = MathMin(ext, rates[0].close);
+   }
+   if(mv.dir < 0)
+      return 100.0 * (ext - mv.tip) / mv.range;
+   return 100.0 * (mv.tip - ext) / mv.range;
+}
+
+void RememberZ(bool &have, int &dir, double &origin, double &tip,
+               datetime &t0, datetime &t1, double &p30,
+               const int d, const double o, const double tp,
+               const datetime a, const datetime b, const double p)
+{
+   have = true;
+   dir = d;
+   origin = o;
+   tip = tp;
+   t0 = a;
+   t1 = b;
+   p30 = p;
+}
+
+void DrawZBundle(const string tag, const int dir,
+                 const double origin, const double tip,
+                 const datetime t_origin, const datetime t_tip,
+                 const double p30, const bool active, const datetime t_now)
+{
+   const color z_raw = (dir < 0) ? ColorContinuedMoveDn : ColorContinuedMove;
+   const color zcol = active ? z_raw : MixContrast50(z_raw);
+   const color c30 = active ? ColorFib30 : ColorFib30Old;
+   const int zw = active ? MathMax(1, MathMin(4, WidthContinuedMove)) : 1;
+   const ENUM_LINE_STYLE zs = active ? ((zw > 1) ? STYLE_DASH : STYLE_DOT) : STYLE_DOT;
+   const int sec = PeriodSeconds(EffectiveStructureTF());
+
+   datetime t_left = t_origin;
+   datetime t_right = t_tip;
+   if(t_right < t_left)
+   {
+      datetime sw = t_left;
+      t_left = t_right;
+      t_right = sw;
+   }
+   long span = (long)(t_right - t_left);
+   long wing = (long)sec * 8;
+   if(span / 6 > wing) wing = span / 6;
+   if(wing < (long)sec * 4) wing = (long)sec * 4;
+
+   datetime h0a = (datetime)((long)t_origin - wing);
+   datetime h0b = (datetime)((long)t_origin + wing);
+   if(h0b > t_right) h0b = t_right;
+   if(h0a >= h0b) h0a = (datetime)((long)h0b - (long)sec * 4);
+
+   datetime h1a = t_tip;
+   datetime h1b = t_now;
+   if(h1b < h1a) h1b = (datetime)((long)h1a + (long)sec * 4);
+   h1b = (datetime)((long)h1b + (long)sec * 2);
+
+   if(ShowContinuedMoveZ)
+   {
+      DrawHLineSegment(tag + "Z0", h0a, h0b, origin, zcol, zs, zw, "");
+      DrawHLineSegment(tag + "Z1", h1a, h1b, tip, zcol, zs, zw, "");
+      DrawTrendSegment(tag + "ZD", t_origin, origin, t_tip, tip, zcol, zs, zw);
+      ObjectSetInteger(0, tag + "ZD", OBJPROP_BACK, false);
+      ObjectSetInteger(0, tag + "ZD", OBJPROP_ZORDER, active ? 80 : 40);
+      ObjectSetString(0, tag + "ZD", OBJPROP_TOOLTIP,
+                      StringFormat("Z %s %s %s | %s → %s",
+                                   StructureTFTag(),
+                                   active ? "актуально" : "неактуально 50%",
+                                   (dir < 0) ? "вниз" : "вверх",
+                                   TimeToString(t_origin, TIME_DATE|TIME_MINUTES),
+                                   TimeToString(t_tip, TIME_DATE|TIME_MINUTES)));
+      if(ShowTipZeroLabel)
+      {
+         const string tip_txt = DoubleToString(MathAbs(origin - tip) / PointValue(), 2);
+         DrawText(tag + "TIP", t_tip, tip, tip_txt, zcol, ANCHOR_LEFT_UPPER);
+         ObjectSetInteger(0, tag + "TIP", OBJPROP_FONTSIZE, active ? 9 : 8);
+      }
+   }
+   if(ShowFib30)
+   {
+      datetime t30b = h1b;
+      if(t30b <= t_tip)
+         t30b = (datetime)((long)t_tip + (long)sec * 8);
+      DrawHLineSegment(tag + "30", t_tip, t30b, p30, c30, STYLE_SOLID, active ? 2 : 1, "");
+      DrawText(tag + "T", t30b, p30, "30", c30, ANCHOR_LEFT_LOWER);
+      ObjectSetInteger(0, tag + "T", OBJPROP_FONTSIZE, active ? 9 : 8);
+      ObjectSetString(0, tag + "30", OBJPROP_TOOLTIP,
+                      active ? "30% актуально" : "30% неактуально: коррекция ≥50%");
+   }
+}
+
 void Fib30ArchiveCurrent()
 {
    if(!g_fib30_have || g_fib30_t1 == 0 || g_fib30_t2 == 0)
@@ -5338,155 +5481,91 @@ void DrawFib30Line(const MqlRates &rates[])
    }
 
    MqlRates z_rates[];
-   const bool use_struct = (EffectiveStructureTF() != Timeframe);
-   if(use_struct)
-   {
-      if(!LoadStructureRates(z_rates, MathMax(400, StructureLookbackBars + 50)))
-      {
-         DeleteObjectsWithPrefix(live);
-         g_fib30_have = false;
-         DrawModelFibOverlays(rates);
-         return;
-      }
-   }
-
-   SContinuedMove mv;
-   bool have_mv = false;
-   // Живое плечо Z с баров StructureTF (M15): рисуется и на M5, кончик = текущий экстремум.
-   if(use_struct)
-      have_mv = BuildLiveContinuedMove(z_rates, mv);
-   else
-      have_mv = BuildLiveContinuedMove(rates, mv);
-   have_mv = have_mv && mv.range > 20.0 * PointValue()
-             && mv.t_origin != mv.t_tip;
-
-   if(g_fib30_have && have_mv)
-   {
-      const double new30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (mv.origin - mv.tip);
-      const bool origin_chg = (mv.t_origin != g_fib30_origin_t);
-      const bool spent_30 = g_fib30_retraced && MathAbs(new30 - g_fib30_price) > 3.0 * PointValue();
-      if(origin_chg || spent_30)
-         Fib30ArchiveCurrent();
-   }
-
-   Fib30HistoryPurge(have_mv);
-
-   DeleteObjectsWithPrefix(Prefix() + "PATH_"); // 3.5 ломаная снята — Z как у Pro
-
-   if(!have_mv)
+   // Всегда бары StructureTF (M15), даже если рабочий график тоже M15.
+   // Не использовать rates графика: на M5 фрактал скорости даёт другое начало плеча.
+   if(!LoadStructureRates(z_rates, MathMax(400, StructureLookbackBars + 50)))
    {
       DeleteObjectsWithPrefix(live);
-      g_fib30_retraced = false;
+      g_fib30_have = false;
       DrawModelFibOverlays(rates);
       return;
    }
 
-   const double price_100 = mv.origin;
-   const double price_0   = mv.tip;
-   const datetime time_100 = mv.t_origin;
-   const datetime time_0   = mv.t_tip;
-   const double price_30 = price_0 + (PD_MinCorrectionPct / 100.0) * (price_100 - price_0);
+   SContinuedMove mv;
+   const bool have_mv_raw = BuildLiveContinuedMove(z_rates, mv);
+   bool have_mv = have_mv_raw;
+   have_mv = have_mv && mv.range > 20.0 * PointValue()
+             && mv.t_origin != mv.t_tip;
 
-   // длина крыльев Z — в барах StructureTF (M15)
-   const int sec = PeriodSeconds(EffectiveStructureTF());
-   datetime t_left = time_100;
-   datetime t_right = time_0;
-   if(t_right < t_left)
-   {
-      datetime sw = t_left; t_left = t_right; t_right = sw;
-   }
-   long span = (long)(t_right - t_left);
-   long wing = (long)sec * 8;
-   if(span / 6 > wing) wing = span / 6;
-   if(wing < (long)sec * 4) wing = (long)sec * 4;
-
-   datetime h0a = (datetime)((long)time_100 - wing);
-   datetime h0b = (datetime)((long)time_100 + wing);
-   if(h0b > t_right) h0b = t_right;
-   if(h0a >= h0b) h0a = (datetime)((long)h0b - (long)sec * 4);
+   Fib30HistoryPurge(have_mv);
+   DeleteObjectsWithPrefix(Prefix() + "PATH_");
 
    const datetime t_now = rates[0].time;
-   datetime h1a = time_0;
-   datetime h1b = t_now;
-   if(h1b < h1a) h1b = (datetime)((long)h1a + (long)sec * 4);
-   h1b = (datetime)((long)h1b + (long)sec * 2);
-   if((long)(h1b - h1a) < (long)sec * 6)
-      h1b = (datetime)((long)h1a + (long)sec * 8);
+   const string prev = Prefix() + "ZPREV_";
 
-   if(ShowContinuedMoveZ)
+   if(!have_mv)
    {
-      int zw = WidthContinuedMove;
-      if(zw < 1) zw = 1;
-      if(zw > 4) zw = 4;
-      ENUM_LINE_STYLE zs = (zw > 1) ? STYLE_DASH : STYLE_DOT;
-      // UP-импульс (лой→хай) = синий; DOWN-импульс (хай→лой) = красный
-      const color zcol = (mv.dir < 0) ? ColorContinuedMoveDn : ColorContinuedMove;
-      // риски 100%/0%: база = origin плеча, tip = 0%
-      DrawHLineSegment(live + "Z0", h0a, h0b, price_100, zcol, zs, zw, "");
-      DrawHLineSegment(live + "Z1", h1a, h1b, price_0, zcol, zs, zw, "");
-      ObjectSetString(0, live + "Z0", OBJPROP_TOOLTIP,
-                      (mv.dir < 0) ? "База Z / 100% (хай перед нисходящим ходом)"
-                                   : "База Z / 100% (лой перед восходящим ходом)");
-      ObjectSetString(0, live + "Z1", OBJPROP_TOOLTIP, "Кончик Z / 0%");
-
-      // Pro: строго ОДНА диагональ origin→tip (+ риски 100%/0%)
-      DeleteObjectsWithPrefix(Prefix() + "PATH_");
-      if(ObjExists(live + "ZA")) ObjectDelete(0, live + "ZA");
-      if(ObjExists(live + "ZB")) ObjectDelete(0, live + "ZB");
-      if(ObjExists(live + "ZC")) ObjectDelete(0, live + "ZC");
-      DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, zcol, zs, zw);
-      ObjectSetInteger(0, live + "ZD", OBJPROP_BACK, false);
-      ObjectSetInteger(0, live + "ZD", OBJPROP_ZORDER, 80);
-      ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP,
-                      (mv.dir < 0) ? "Z вниз с M15: хай→живой лой"
-                                   : "Z вверх с M15: лой→живой хай");
-
-      if(ShowTipZeroLabel)
+      if(g_zlive_have)
       {
-         const string tip_txt = DoubleToString(mv.range / PointValue(), 2);
-         DrawText(live + "TIP", time_0, price_0, tip_txt, zcol, ANCHOR_LEFT_UPPER);
-         ObjectSetInteger(0, live + "TIP", OBJPROP_FONTSIZE, 9);
-         ObjectSetString(0, live + "TIP", OBJPROP_TOOLTIP, "Длина плеча Z, пункты");
+         RememberZ(g_zprev_have, g_zprev_dir, g_zprev_origin, g_zprev_tip,
+                   g_zprev_t0, g_zprev_t1, g_zprev_p30,
+                   g_zlive_dir, g_zlive_origin, g_zlive_tip, g_zlive_t0, g_zlive_t1, g_zlive_p30);
+         g_zlive_have = false;
       }
-      else if(ObjExists(live + "TIP"))
-         ObjectDelete(0, live + "TIP");
-   }
-   else
-   {
-      if(ObjExists(live + "Z0")) ObjectDelete(0, live + "Z0");
-      if(ObjExists(live + "Z1")) ObjectDelete(0, live + "Z1");
-      if(ObjExists(live + "ZD")) ObjectDelete(0, live + "ZD");
-      if(ObjExists(live + "ZA")) ObjectDelete(0, live + "ZA");
-      if(ObjExists(live + "ZB")) ObjectDelete(0, live + "ZB");
-      if(ObjExists(live + "ZC")) ObjectDelete(0, live + "ZC");
-      if(ObjExists(live + "TIP")) ObjectDelete(0, live + "TIP");
-   }
-
-   datetime t30a = time_0;
-   datetime t30b = h1b;
-   if(t30b <= t30a)
-      t30b = (datetime)((long)t30a + (long)sec * 8);
-
-   if(ShowFib30)
-   {
-      DrawHLineSegment(live + "30", t30a, t30b, price_30, ColorFib30, STYLE_SOLID, 2, "");
-      DrawText(live + "T", t30b, price_30, "30", ColorFib30, ANCHOR_LEFT_LOWER);
-      ObjectSetInteger(0, live + "T", OBJPROP_FONTSIZE, 9);
-      ObjectSetString(0, live + "30", OBJPROP_TOOLTIP, "Вспомогательная линия отката 30% (UX ASmart)");
-      ObjectSetString(0, live + "T", OBJPROP_TOOLTIP, "Откат 30% от импульса — зона поиска входа");
-      g_fib30_origin_t = mv.t_origin;
-      g_fib30_price    = price_30;
-      g_fib30_t1       = t30a;
-      g_fib30_t2       = t30b;
-      g_fib30_have     = true;
-      g_fib30_retraced = mv.retraced_30;
-   }
-   else
-   {
-      if(ObjExists(live + "30")) ObjectDelete(0, live + "30");
-      if(ObjExists(live + "T")) ObjectDelete(0, live + "T");
+      DeleteObjectsWithPrefix(live);
+      if(g_zprev_have)
+         DrawZBundle(prev, g_zprev_dir, g_zprev_origin, g_zprev_tip, g_zprev_t0, g_zprev_t1, g_zprev_p30, false, t_now);
+      g_fib30_retraced = false;
       g_fib30_have = false;
+      DrawModelFibOverlays(rates);
+      return;
    }
+
+   const double price_30 = mv.tip + (PD_MinCorrectionPct / 100.0) * (mv.origin - mv.tip);
+   const double retrace = ContinuedRetracePct(z_rates, mv);
+   const bool spent = (retrace + 1.0e-8 >= PD_CancelRetracePct);
+   mv.retrace_pct = retrace;
+   mv.retraced_30 = (retrace + 1.0e-8 >= PD_MinCorrectionPct);
+   mv.cancelled_50 = spent;
+
+   const bool same = (g_zlive_have && mv.t_origin == g_zlive_t0 && mv.dir == g_zlive_dir);
+   if(g_zlive_have && !same)
+   {
+      RememberZ(g_zprev_have, g_zprev_dir, g_zprev_origin, g_zprev_tip,
+                g_zprev_t0, g_zprev_t1, g_zprev_p30,
+                g_zlive_dir, g_zlive_origin, g_zlive_tip, g_zlive_t0, g_zlive_t1, g_zlive_p30);
+   }
+   if(spent)
+   {
+      RememberZ(g_zprev_have, g_zprev_dir, g_zprev_origin, g_zprev_tip,
+                g_zprev_t0, g_zprev_t1, g_zprev_p30,
+                mv.dir, mv.origin, mv.tip, mv.t_origin, mv.t_tip, price_30);
+      g_zlive_have = false;
+      DeleteObjectsWithPrefix(live);
+   }
+   else
+   {
+      RememberZ(g_zlive_have, g_zlive_dir, g_zlive_origin, g_zlive_tip,
+                g_zlive_t0, g_zlive_t1, g_zlive_p30,
+                mv.dir, mv.origin, mv.tip, mv.t_origin, mv.t_tip, price_30);
+      if(g_zprev_have && g_zprev_t0 == mv.t_origin && g_zprev_dir == mv.dir)
+         g_zprev_have = false;
+   }
+
+   if(g_zprev_have)
+      DrawZBundle(prev, g_zprev_dir, g_zprev_origin, g_zprev_tip, g_zprev_t0, g_zprev_t1, g_zprev_p30, false, t_now);
+   else
+      DeleteObjectsWithPrefix(prev);
+
+   if(!spent)
+      DrawZBundle(live, mv.dir, mv.origin, mv.tip, mv.t_origin, mv.t_tip, price_30, true, t_now);
+
+   g_fib30_origin_t = mv.t_origin;
+   g_fib30_price    = price_30;
+   g_fib30_t1       = mv.t_tip;
+   g_fib30_t2       = t_now;
+   g_fib30_have     = !spent;
+   g_fib30_retraced = mv.retraced_30;
 
    if(ObjExists(pfx)) ObjectDelete(0, pfx);
    if(ObjExists(pfx + "_BAND")) ObjectDelete(0, pfx + "_BAND");
@@ -8906,6 +8985,8 @@ int OnInit()
    g_fib30_t2       = 0;
    g_fib30_have     = false;
    g_fib30_retraced = false;
+   g_zlive_have     = false;
+   g_zprev_have     = false;
    g_lastImpulseRange = 0.0;
    g_lastImpulseDir   = 0;
    ResetModelZone(g_modelBasic);

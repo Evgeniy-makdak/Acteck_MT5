@@ -1,4 +1,4 @@
-Compile MQL5/Experts/ASmart 4.23.mq5 (F7)
+Compile MQL5/Experts/ASmart 4.24.mq5 (F7)
 Карточка: UserGuide_ASmart_4.23_RU.txt
 Мануал: ASmart_4.23_Manual_RU.pdf / .txt
 Пресеты: MQL5/Presets/Acteck_v4.21_*.set
