@@ -5,10 +5,11 @@
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.23 — КЗ и Z строго с M15; вход с рабочего ТФ; Сейф 1R+2R"
+#property description "ASmart 4.23 — КЗ/Z с M15; прицел = BB(100); квадрат РМ после выхода и возврата"
 #property version   "4.23"
 
 #define EA_VERSION "4.23"
+#include <Canvas/Canvas.mqh>
 
 
 //=========================
@@ -235,6 +236,9 @@ input int                  SightBarsWidth       = 14;     // ширина рам
 input int                  SightDashBars        = 5;      // длина RGB-чёрточек (баров)
 input double               SightNearATR         = 1.5;
 input bool                 SightLevelsLive      = true;
+input int                  SightBB_Period       = 100;    // период Боллинджера прицела (Снайпер)
+input double               SightBB_Deviation    = 2.0;    // отклонение полос
+input int                  SightBB_Lookback     = 12;     // баров поиска выхода за полосу и возврата
 input color                ColorSightBuy        = clrDodgerBlue;  // голубой BUY
 input color                ColorSightSell       = clrMaroon;      // бордовый SELL
 input color                ColorSightDashHi     = clrRed;
@@ -669,6 +673,8 @@ datetime g_casc4Spent = 0;
 
 // Dual-TF / Balance RSI / alerts runtime
 int      g_hRSI = INVALID_HANDLE;
+CCanvas  g_fearSpark;
+bool     g_fearSparkOn = false;
 double   g_boundHigh = 0.0;
 double   g_boundLow = 0.0;
 bool     g_boundActive = false;
@@ -1731,6 +1737,119 @@ bool FindContinuedMove(const MqlRates &rates[], SContinuedMove &m)
 
    g_lastImpulseRange = m.range;
    g_lastImpulseDir   = m.dir;
+   return true;
+}
+
+// Графический Z как у Снайпера: плечо с M15 до живого экстремума,
+// не дожидаясь фрактала на кончике (на M5 линия уже видна).
+bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
+{
+   m.valid = false;
+   m.retraced_30 = false;
+   m.cancelled_50 = false;
+   m.dir = 0;
+   m.origin = 0.0;
+   m.tip = 0.0;
+   m.t_origin = 0;
+   m.t_tip = 0;
+   m.i_tip = 0;
+   m.range = 0.0;
+   m.retrace_pct = 0.0;
+   m.has_iki_z = false;
+
+   const int nr = ArraySize(rates);
+   if(nr < 40)
+      return false;
+
+   SPivot swings[];
+   if(!BuildSwingPoints(rates, swings, 64))
+      return false;
+   const int ns = ArraySize(swings);
+   if(ns < 2)
+      return false;
+
+   double atr = 0.0;
+   const int ap = 14;
+   int ac = 0;
+   for(int i = 1; i <= ap && i < nr; i++)
+   {
+      atr += MathMax(rates[i].high, rates[i - 1].close) - MathMin(rates[i].low, rates[i - 1].close);
+      ac++;
+   }
+   if(ac > 0) atr /= (double)ac;
+   double min_need = (atr > 0.0) ? MathMax(20.0 * PointValue(), 0.55 * atr) : MinContinuedMoveRange();
+
+   int best_dir = 0;
+   double best_origin = 0.0, best_tip = 0.0;
+   datetime best_to = 0, best_tt = 0;
+   int best_it = 1;
+
+   for(int s = ns - 1; s >= 1 && s >= ns - 6; s--)
+   {
+      int i_sw = -1;
+      for(int r = 0; r < nr; r++)
+      {
+         if(rates[r].time == swings[s].t)
+         { i_sw = r; break; }
+      }
+      if(i_sw < 0)
+         continue;
+
+      if(swings[s].type > 0)
+      {
+         double lo = swings[s].p;
+         int ilo = i_sw;
+         for(int i = 0; i <= i_sw; i++)
+         {
+            if(rates[i].low < lo)
+            { lo = rates[i].low; ilo = i; }
+         }
+         const double sz = swings[s].p - lo;
+         if(sz >= min_need && (best_dir == 0 || rates[ilo].time >= best_tt))
+         {
+            best_dir = -1;
+            best_origin = swings[s].p;
+            best_tip = lo;
+            best_to = swings[s].t;
+            best_tt = rates[ilo].time;
+            best_it = ilo;
+         }
+      }
+      else
+      {
+         double hi = swings[s].p;
+         int ihi = i_sw;
+         for(int i = 0; i <= i_sw; i++)
+         {
+            if(rates[i].high > hi)
+            { hi = rates[i].high; ihi = i; }
+         }
+         const double sz = hi - swings[s].p;
+         if(sz >= min_need && (best_dir == 0 || rates[ihi].time >= best_tt))
+         {
+            best_dir = 1;
+            best_origin = swings[s].p;
+            best_tip = hi;
+            best_to = swings[s].t;
+            best_tt = rates[ihi].time;
+            best_it = ihi;
+         }
+      }
+   }
+
+   if(best_dir == 0 || best_to == best_tt)
+      return false;
+
+   m.valid = true;
+   m.dir = best_dir;
+   m.origin = best_origin;
+   m.tip = best_tip;
+   m.t_origin = best_to;
+   m.t_tip = best_tt;
+   m.i_tip = best_it;
+   m.range = MathAbs(best_origin - best_tip);
+   g_lastImpulseRange = m.range;
+   g_lastImpulseDir = m.dir;
    return true;
 }
 
@@ -4237,32 +4356,116 @@ void SightDash(const string name, datetime t1, datetime t2, const double price, 
    ObjectSetInteger(0, name, OBJPROP_ZORDER, 100);
 }
 
-void NudgeSightLevelsLive()
+// Боллинджер как в MT: SMA(close) и стандартное отклонение / N.
+bool BollingerAt(const MqlRates &rates[], const int shift, double &up, double &mid, double &lo)
 {
-   if(!SightLevelsLive || !g_sightActive || g_sightAnchor <= 0.0)
+   const int period = MathMax(5, SightBB_Period);
+   const double dev = (SightBB_Deviation > 0.0) ? SightBB_Deviation : 2.0;
+   const int nr = ArraySize(rates);
+   if(shift < 0 || shift + period > nr)
+      return false;
+   double sum = 0.0;
+   for(int i = shift; i < shift + period; i++)
+      sum += rates[i].close;
+   mid = sum / (double)period;
+   double var = 0.0;
+   for(int i = shift; i < shift + period; i++)
+   {
+      const double d = rates[i].close - mid;
+      var += d * d;
+   }
+   const double sd = MathSqrt(var / (double)period);
+   up = mid + dev * sd;
+   lo = mid - dev * sd;
+   return (up > lo);
+}
+
+bool SightCloseInside(const MqlRates &rates[], const int shift, const double up, const double lo)
+{
+   return (rates[shift].close <= up && rates[shift].close >= lo);
+}
+
+// Снайпер: внутри канала → импульс за внешнюю полосу → закрытие обратно внутрь.
+// Прямоугольник РМ только на свече этого возврата (последняя закрытая).
+bool SightImpulseReturned(const MqlRates &rates[], const int direction, int &ret_shift)
+{
+   ret_shift = 1;
+   if(direction == 0)
+      return false;
+   const int nr = ArraySize(rates);
+   const int period = MathMax(5, SightBB_Period);
+   const int look = MathMin(nr - 1, MathMax(4, SightBB_Lookback));
+   if(nr < period + look + 2)
+      return false;
+
+   double up = 0.0, mid = 0.0, lo = 0.0;
+   if(!BollingerAt(rates, 1, up, mid, lo))
+      return false;
+   if(!SightCloseInside(rates, 1, up, lo))
+      return false;
+
+   int pierce_i = -1;
+   for(int i = 1; i <= look; i++)
+   {
+      double u = 0.0, m = 0.0, l = 0.0;
+      if(!BollingerAt(rates, i, u, m, l))
+         continue;
+      const bool pierced = (direction < 0) ? (rates[i].high > u) : (rates[i].low < l);
+      if(pierced)
+      {
+         pierce_i = i;
+         break;
+      }
+   }
+   if(pierce_i < 0)
+      return false;
+
+   bool inside_before = false;
+   {
+      double u = 0.0, m = 0.0, l = 0.0;
+      if(BollingerAt(rates, pierce_i, u, m, l)
+         && rates[pierce_i].open <= u && rates[pierce_i].open >= l)
+         inside_before = true;
+   }
+   for(int i = pierce_i + 1; i <= look && !inside_before; i++)
+   {
+      double u = 0.0, m = 0.0, l = 0.0;
+      if(!BollingerAt(rates, i, u, m, l))
+         continue;
+      if(SightCloseInside(rates, i, u, l))
+         inside_before = true;
+   }
+   if(!inside_before)
+      return false;
+
+   // возврат уже был на более старой свече — квадрат не держим
+   for(int i = pierce_i - 1; i >= 2; i--)
+   {
+      double u = 0.0, m = 0.0, l = 0.0;
+      if(!BollingerAt(rates, i, u, m, l))
+         continue;
+      if(SightCloseInside(rates, i, u, l))
+         return false;
+   }
+   return true;
+}
+
+void ApplySightBands(const MqlRates &rates[], const int shift)
+{
+   double up = 0.0, mid = 0.0, lo = 0.0;
+   if(!BollingerAt(rates, shift, up, mid, lo))
       return;
-   double atr = 0.0;
-   if(!GetBufferValue(g_hATR_Filter, 0, atr) || atr <= 0.0)
-      if(!GetBufferValue(g_hATR_Filter, 1, atr) || atr <= 0.0)
-         return;
-   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   const double h = MathMax(8 * PointValue(), SightATR_Height * atr);
-   // Полоса вокруг якоря; лёгкий сдвиг к цене — «дыхание» как в Sniper-PRO
-   double hi, lo;
-   if(g_sightDirection < 0)
-   {
-      hi = g_sightAnchor + h * 0.35;
-      lo = g_sightAnchor - h * 0.65;
-   }
-   else
-   {
-      hi = g_sightAnchor + h * 0.65;
-      lo = g_sightAnchor - h * 0.35;
-   }
-   double mid = 0.5 * (hi + lo);
-   double shift = 0.12 * (price - mid);
-   g_sightHigh = hi + shift;
-   g_sightLow  = lo + shift;
+   g_sightActive = true;
+   g_sightHigh = up;
+   g_sightLow = lo;
+   g_sightAnchor = mid;
+}
+
+void NudgeSightLevelsLive(const MqlRates &rates[])
+{
+   if(!SightLevelsLive)
+      return;
+   ApplySightBands(rates, 0);
 }
 
 // Прицел (эталонный скрин): пустая пунктирная рамка + RGB-чёрточки + подпись.
@@ -4284,9 +4487,11 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
    // Короткие чёрточки у правого края рамки
    datetime td2 = t2;
    datetime td1 = t2 - (datetime)(sec * MathMax(3, SightDashBars));
-   double mid = 0.5 * (g_sightHigh + g_sightLow);
-   string label = (g_sightDirection > 0) ? "ПРИЦЕЛ BUY" : "ПРИЦЕЛ SELL";
-   color border = (g_sightDirection > 0) ? ColorSightBuy : ColorSightSell;
+   double mid = g_sightAnchor;
+   if(mid <= 0.0)
+      mid = 0.5 * (g_sightHigh + g_sightLow);
+   string label = (g_sightDirection > 0) ? "ПРИЦЕЛ BUY" : ((g_sightDirection < 0) ? "ПРИЦЕЛ SELL" : "");
+   color border = (g_sightDirection > 0) ? ColorSightBuy : ((g_sightDirection < 0) ? ColorSightSell : clrSilver);
 
    const string tl  = Prefix() + "SIGHT_TL";
    const string d1  = Prefix() + "SIGHT_D1";
@@ -4339,164 +4544,63 @@ void SyncSightObjects(const MqlRates &rates[], const bool force_recreate)
       if(ObjExists(d3)) ObjectDelete(0, d3);
    }
 
-   // Подпись у правого края прицела — не в центре свечей/сигналов
-   DrawText(txt, td1, g_sightHigh + 8 * PointValue(), label, border, ANCHOR_LEFT_LOWER);
-   ObjectSetString(0, txt, OBJPROP_FONT, "Arial");
-   ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 8);
-   ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
+   // Подпись только когда фильтр BB подтвердил сторону. Сами чёрточки — всегда полосы.
+   if(StringLen(label) > 0)
+   {
+      DrawText(txt, td1, g_sightHigh + 8 * PointValue(), label, border, ANCHOR_LEFT_LOWER);
+      ObjectSetString(0, txt, OBJPROP_FONT, "Arial");
+      ObjectSetInteger(0, txt, OBJPROP_FONTSIZE, 8);
+      ObjectSetInteger(0, txt, OBJPROP_ZORDER, 102);
+   }
+   else if(ObjExists(txt))
+      ObjectDelete(0, txt);
 }
 
 // Внутри бара: сторона sticky; уровни чёрточек могут дышать с ценой
 void MaintainSightIntrabar(const MqlRates &rates[])
 {
-   if(!g_sightActive)
+   if(!ShowSight && !g_sightActive)
       return;
-   NudgeSightLevelsLive();
+   NudgeSightLevelsLive(rates);
    SyncSightObjects(rates, false);
 }
 
 void UpdateSight(const MqlRates &rates[])
 {
-   // Пересчёт на закрытии бара. Важно: не очищаем UI до готовности нового состояния
-   // (иначе кадр «пустого» прицела при смене BUY↔SELL).
+   // Прицел = Боллинджер периода SightBB_Period (по умолчанию 100) на рабочем ТФ.
+   // Красная черта = верхняя полоса, зелёная = средняя, синяя = нижняя.
+   // Сторона BUY/SELL — только после импульса за полосу и закрытия обратно внутрь.
 
-   if(!ShowSight && !RequireSightForEntry)
+   if(!ShowSight && !RequireSightForEntry && !AlignBreakoutWithSight)
    {
-      DeleteObjectsWithPrefix(Prefix() + "SIGHT_"); // только снять объекты UI
+      DeleteObjectsWithPrefix(Prefix() + "SIGHT_");
+      g_sightActive = false;
       return;
    }
 
-   double atr = 0.0;
-   if(!GetBufferValue(g_hATR_Filter, 1, atr) || atr <= 0.0)
-      return;
-
-   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   const double near = SightNearATR * atr;
-   const double h = MathMax(8 * PointValue(), SightATR_Height * atr);
-
-   const bool had = g_sightActive;
    const int old_dir = g_sightDirection;
-   const double old_anchor = g_sightAnchor;
-   const double old_high = g_sightHigh;
-   const double old_low = g_sightLow;
-   const datetime old_t0 = g_sightUpdateBar;
+   const bool had = g_sightActive;
 
-   double best_level = 0.0;
-   int best_anchor_dir = 0; // -1 demand, +1 supply
-   double best_score = -1.0;
-
-   for(int i = 0; i < ArraySize(g_sessions); i++)
-   {
-      if(!g_sessions[i].valid) continue;
-      if(NearPrice(price, g_sessions[i].low, near))
-      {
-         double score = 1.0 - MathAbs(price - g_sessions[i].low) / near;
-         if(score > best_score) { best_score = score; best_level = g_sessions[i].low; best_anchor_dir = -1; }
-      }
-      if(NearPrice(price, g_sessions[i].high, near))
-      {
-         double score = 1.0 - MathAbs(price - g_sessions[i].high) / near;
-         if(score > best_score) { best_score = score; best_level = g_sessions[i].high; best_anchor_dir = 1; }
-      }
-   }
-
-   for(int i = 0; i < ArraySize(g_liqZones); i++)
-   {
-      if(!g_liqZones[i].active) continue;
-      double mid = 0.5 * (g_liqZones[i].high + g_liqZones[i].low);
-      if(!NearPrice(price, mid, near * 1.2))
-         continue;
-      double score = 1.15 - MathAbs(price - mid) / (near * 1.2);
-      if(score > best_score)
-      {
-         best_score = score;
-         best_level = mid;
-         best_anchor_dir = g_liqZones[i].type;
-      }
-   }
-
-   if(g_zone.active)
-   {
-      if(NearPrice(price, g_zone.low, near))
-      {
-         double score = 1.05 - MathAbs(price - g_zone.low) / near;
-         if(score > best_score) { best_score = score; best_level = g_zone.low; best_anchor_dir = -1; }
-      }
-      if(NearPrice(price, g_zone.high, near))
-      {
-         double score = 1.05 - MathAbs(price - g_zone.high) / near;
-         if(score > best_score) { best_score = score; best_level = g_zone.high; best_anchor_dir = 1; }
-      }
-   }
-
-   // Нет уверенного якоря → сохраняем прежний прицел (sticky), не гасим UI
-   if(best_score < 0.15 || best_anchor_dir == 0)
-   {
-      if(had)
-      {
-         bool far = false;
-         if(atr > 0.0 && SightCancelATR > 0.0 && old_anchor != 0.0)
-            far = (MathAbs(price - old_anchor) > SightCancelATR * atr);
-         if(far)
-            ClearSight();
-         else
-         {
-            // оставляем сторону/уровни, только продлеваем рамку
-            g_sightActive = true;
-            g_sightDirection = old_dir;
-            g_sightHigh = old_high;
-            g_sightLow = old_low;
-            g_sightAnchor = old_anchor;
-            if(old_t0 > 0)
-               g_sightUpdateBar = old_t0;
-            SyncSightObjects(rates, false);
-         }
-      }
+   ApplySightBands(rates, (SightLevelsLive ? 0 : 1));
+   if(!g_sightActive)
       return;
-   }
 
-   const int new_dir = (best_anchor_dir > 0) ? -1 : 1; // supply→SELL, demand→BUY
-
-   // Гистерезис смены стороны: не переворачиваем при слабом перевесе
-   if(had && old_dir != 0 && new_dir != old_dir && best_score < 0.45)
-   {
-      g_sightActive = true;
-      g_sightDirection = old_dir;
-      g_sightHigh = old_high;
-      g_sightLow = old_low;
-      g_sightAnchor = old_anchor;
-      if(old_t0 > 0)
-         g_sightUpdateBar = old_t0;
-      SyncSightObjects(rates, false);
-      return;
-   }
-
-   // Атомарно ставим новое состояние, затем один sync (без промежуточного Clear)
-   double new_high, new_low;
-   if(best_anchor_dir > 0)
-   {
-      new_high = best_level + h * 0.35;
-      new_low  = best_level - h * 0.65;
-   }
-   else
-   {
-      new_high = best_level + h * 0.65;
-      new_low  = best_level - h * 0.35;
-   }
-
-   const bool side_changed = (had && old_dir != new_dir);
-   g_sightActive = true;
+   int sh = 1;
+   int new_dir = 0;
+   if(SightImpulseReturned(rates, -1, sh))
+      new_dir = -1;
+   else if(SightImpulseReturned(rates, 1, sh))
+      new_dir = 1;
    g_sightDirection = new_dir;
-   g_sightHigh = new_high;
-   g_sightLow = new_low;
-   g_sightAnchor = best_level;
+
    g_sightUpdateBar = rates[0].time;
+   const bool side_changed = (had && old_dir != 0 && g_sightDirection != old_dir);
    SyncSightObjects(rates, side_changed || !had);
 
-   if((!had || side_changed) && new_dir != 0 && new_dir != g_lastSightDirAlert)
+   if(new_dir != 0 && new_dir != g_lastSightDirAlert)
    {
       g_lastSightDirAlert = new_dir;
-      FireSniperAlert(ALT_SIGHT, (new_dir > 0) ? "прицел BUY" : "прицел SELL");
+      FireSniperAlert(ALT_SIGHT, (new_dir > 0) ? "прицел BUY (возврат в BB)" : "прицел SELL (возврат в BB)");
    }
 }
 
@@ -4747,11 +4851,65 @@ int HistoryLenFear()
    return MathMax(8, MathMax(FearHistoryLen, ProbHistoryLen));
 }
 
+void DrawFearSparkline(const color clr)
+{
+   const int W = 110;
+   const int H = 36;
+   const int n = MathMin(48, MathMax(12, HistoryLenFear()));
+   const string name = Prefix() + "FEAR_SPARK";
+
+   if(g_hRSI == INVALID_HANDLE)
+      return;
+
+   double rsi[];
+   ArraySetAsSeries(rsi, true);
+   const int got = CopyBuffer(g_hRSI, 0, 0, n, rsi);
+   if(got < 8)
+      return;
+
+   if(!g_fearSparkOn)
+   {
+      if(!g_fearSpark.CreateBitmapLabel(name, 0, 0, W, H, COLOR_FORMAT_ARGB_NORMALIZE))
+         return;
+      g_fearSparkOn = true;
+   }
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 62);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 28);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 210);
+
+   g_fearSpark.Erase(0);
+   const uint col = ColorToARGB(clr, 255);
+   const int pts = got;
+   for(int k = pts - 1; k > 0; k--)
+   {
+      const int x1 = 2 + (int)((pts - 1 - k) * (W - 6) / (pts - 1));
+      const int x2 = 2 + (int)((pts - k) * (W - 6) / (pts - 1));
+      int y1 = (int)MathRound((100.0 - rsi[k]) / 100.0 * (H - 6)) + 3;
+      int y2 = (int)MathRound((100.0 - rsi[k - 1]) / 100.0 * (H - 6)) + 3;
+      if(y1 < 1) y1 = 1;
+      if(y2 < 1) y2 = 1;
+      if(y1 > H - 2) y1 = H - 2;
+      if(y2 > H - 2) y2 = H - 2;
+      g_fearSpark.Line(x1, y1, x2, y2, col);
+   }
+   g_fearSpark.Update();
+}
+
 void UpdateFearIndexHUD(const int display_value)
 {
    if(!ShowFearHudEnabled())
    {
       DeleteObjectsWithPrefix(Prefix() + "PROB_");
+      if(g_fearSparkOn)
+      {
+         g_fearSpark.Destroy();
+         g_fearSparkOn = false;
+      }
+      if(ObjExists(Prefix() + "FEAR_SPARK"))
+         ObjectDelete(0, Prefix() + "FEAR_SPARK");
       return;
    }
 
@@ -4764,9 +4922,11 @@ void UpdateFearIndexHUD(const int display_value)
 
    color c = FearIndexColor(display_value);
 
-   // Как на эталоне: одно число без «%» — это индекс страха, не вероятность профита.
-   HudLabel(Prefix() + "PROB_NUM", 14, 44,
-            IntegerToString(display_value), c, 24, "Arial Bold");
+   // RSI(14): хвост графика слева и текущее значение справа, как на Снайпере.
+   DrawFearSparkline(c);
+   HudLabel(Prefix() + "PROB_NUM", 14, 36,
+            IntegerToString(display_value), c, 22, "Arial Bold");
+   ObjectSetString(0, Prefix() + "PROB_NUM", OBJPROP_TOOLTIP, "RSI 14 — индекс страха");
 }
 
 void UpdateProbabilityHUD(const int display_value)
@@ -5177,12 +5337,19 @@ void DrawFib30Line(const MqlRates &rates[])
 
    SContinuedMove mv;
    bool have_mv = false;
+   // Живое плечо Z с баров StructureTF (M15): рисуется и на M5, кончик = текущий экстремум.
    if(use_struct)
-      have_mv = FindContinuedMove(z_rates, mv);
+      have_mv = BuildLiveContinuedMove(z_rates, mv);
    else
-      have_mv = FindContinuedMove(rates, mv);
-   have_mv = have_mv && mv.range > MinContinuedMoveRange()
-             && MathAbs(mv.origin - mv.tip) > MinContinuedMoveRange()
+      have_mv = BuildLiveContinuedMove(rates, mv);
+   if(!have_mv)
+   {
+      if(use_struct)
+         have_mv = FindContinuedMove(z_rates, mv);
+      else
+         have_mv = FindContinuedMove(rates, mv);
+   }
+   have_mv = have_mv && mv.range > 20.0 * PointValue()
              && mv.t_origin != mv.t_tip;
 
    if(g_fib30_have && have_mv)
@@ -5260,15 +5427,18 @@ void DrawFib30Line(const MqlRates &rates[])
       if(ObjExists(live + "ZB")) ObjectDelete(0, live + "ZB");
       if(ObjExists(live + "ZC")) ObjectDelete(0, live + "ZC");
       DrawTrendSegment(live + "ZD", time_100, price_100, time_0, price_0, zcol, zs, zw);
+      ObjectSetInteger(0, live + "ZD", OBJPROP_BACK, false);
+      ObjectSetInteger(0, live + "ZD", OBJPROP_ZORDER, 80);
       ObjectSetString(0, live + "ZD", OBJPROP_TOOLTIP,
-                      (mv.dir < 0) ? "Z вниз: хай→лой (ожидание откупа / разворот вверх у «30»)"
-                                   : "Z вверх: лой→хай (ожидание продаж / разворот вниз у «30»)");
+                      (mv.dir < 0) ? "Z вниз с M15: хай→живой лой"
+                                   : "Z вверх с M15: лой→живой хай");
 
       if(ShowTipZeroLabel)
       {
-         DrawText(live + "TIP", h1b, price_0, "-0.00", zcol, ANCHOR_LEFT_UPPER);
-         ObjectSetInteger(0, live + "TIP", OBJPROP_FONTSIZE, 8);
-         ObjectSetString(0, live + "TIP", OBJPROP_TOOLTIP, "Конец импульса (0%)");
+         const string tip_txt = DoubleToString(mv.range / PointValue(), 2);
+         DrawText(live + "TIP", time_0, price_0, tip_txt, zcol, ANCHOR_LEFT_UPPER);
+         ObjectSetInteger(0, live + "TIP", OBJPROP_FONTSIZE, 9);
+         ObjectSetString(0, live + "TIP", OBJPROP_TOOLTIP, "Длина плеча Z, пункты");
       }
       else if(ObjExists(live + "TIP"))
          ObjectDelete(0, live + "TIP");
@@ -6601,13 +6771,10 @@ void DetectReversalMoments(const MqlRates &rates[], const string tf_tag)
    if(!GetBufferValue(g_hATR_Filter, shift, atr) || atr <= 0.0) return;
 
    double up_move = 0.0, dn_move = 0.0;
-   double win_hi = rates[shift].high, win_lo = rates[shift].low;
    for(int i = shift + 1; i <= shift + bars; i++)
    {
       up_move += MathMax(0.0, rates[i].close - rates[i].open);
       dn_move += MathMax(0.0, rates[i].open - rates[i].close);
-      if(rates[i].high > win_hi) win_hi = rates[i].high;
-      if(rates[i].low < win_lo) win_lo = rates[i].low;
    }
 
    MqlRates stall = rates[shift];
@@ -6633,11 +6800,34 @@ void DetectReversalMoments(const MqlRates &rates[], const string tf_tag)
       else if(dn_move >= RM_ImpulseATR_Mult * atr && lower_wick >= need && lower_wick > upper_wick)
       { dir = 1; rm_lab = "РМ отклонение BUY"; }
    }
-   if(dir == 0) return;
 
-   const double peak_pad = MathMax(8.0 * PointValue(), MathMax(0.0, RM_PeakATR_Pad) * atr);
-   if(dir < 0 && stall.high + peak_pad < win_hi) return;
-   if(dir > 0 && stall.low - peak_pad > win_lo) return;
+   // Квадрат только если импульс вышел за Боллинджер прицела и закрылся обратно внутрь.
+   int bb_shift = 1;
+   const bool bb_sell = SightImpulseReturned(rates, -1, bb_shift);
+   const bool bb_buy  = SightImpulseReturned(rates, 1, bb_shift);
+   if(dir < 0 && !bb_sell) dir = 0;
+   if(dir > 0 && !bb_buy) dir = 0;
+   if(dir == 0)
+   {
+      if(bb_sell && !bb_buy)
+      {
+         dir = -1;
+         stall = rates[1];
+         rm_lab = "РМ BB продажа";
+      }
+      else if(bb_buy && !bb_sell)
+      {
+         dir = 1;
+         stall = rates[1];
+         rm_lab = "РМ BB покупка";
+      }
+      else
+         return;
+   }
+   else if(bb_sell)
+      rm_lab = "РМ BB продажа";
+   else if(bb_buy)
+      rm_lab = "РМ BB покупка";
 
    const int sec = PeriodSeconds(Timeframe);
    PushStructureZoneEx(SK_RM, PAT_NONE, dir, stall.time, stall.time + (datetime)sec,
@@ -8858,6 +9048,11 @@ void OnDeinit(const int reason)
       IndicatorRelease(g_hATR_Zone);
    if(g_hRSI != INVALID_HANDLE)
       IndicatorRelease(g_hRSI);
+   if(g_fearSparkOn)
+   {
+      g_fearSpark.Destroy();
+      g_fearSparkOn = false;
+   }
 
    g_hEMA = INVALID_HANDLE;
    g_hATR_Filter = INVALID_HANDLE;
