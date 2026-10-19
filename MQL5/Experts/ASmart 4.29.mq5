@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|  ASmart 4.28                                                       |
+//|  ASmart 4.29                                                       |
 //|  Copyright Evgeniy Acteck — All rights reserved                    |
 //|  Sniper: ПД T1/T2, расширение T1/T2, каскад 3/4 — по урокам МТ   |
 //|  Актуальная сборка ACTECK MT5                                     |
 //+------------------------------------------------------------------+
 #property copyright "Evgeniy Acteck"
-#property description "ASmart 4.28 — без служебных подписей «против хода» и «страх» у сделки"
-#property version   "4.28"
+#property description "ASmart 4.29 — Z от базы импульса, как у Снайпера"
+#property version   "4.29"
 
-#define EA_VERSION "4.28"
+#define EA_VERSION "4.29"
 #include <Canvas/Canvas.mqh>
 
 
@@ -161,7 +161,7 @@ input int                  MaxPositions         = 2;      // при SafeSplitDea
 input int                  MaxSpread            = 20;     // points
 input int                  Slippage             = 10;     // points
 input long                 MagicNumber          = 240117;
-input string               CommentPrefix        = "ASmart428";
+input string               CommentPrefix        = "ASmart429";
 
 // Swing / "pro-torgovka"
 input ENUM_SWING_MODE      SwingMode            = SWING_FRACTALS;
@@ -1821,104 +1821,160 @@ bool BuildLiveContinuedMove(const MqlRates &rates[], SContinuedMove &m)
    if(nr < 40)
       return false;
 
-   SBaseBar bases[];
-   const int look = MathMin(nr - 1, MathMax(80, StructureLookbackBars));
-   if(BuildBaseBars(rates, look, bases) < 6)
-      return false;
-   SBaseEvent ev[];
-   if(ExpandBaseEvents(bases, rates, ev) < 4)
-      return false;
-   const int ne = ArraySize(ev);
-
-   int seg_end = ne - 1;
-   int seg_start = seg_end;
-   while(seg_start > 0 && ev[seg_start - 1].dir == ev[seg_end].dir)
-      seg_start--;
-   if(seg_start < 1)
+   // Снайпер: одно плечо. База — последний подтверждённый свинг M15 (глубина 3,
+   // не SpeedPreset). Если после него цена обновила предыдущий экстремум,
+   // диагональ идёт от этой базы к живому кончику. Короткий откат плечо не сменяет.
+   const int depth = 3;
+   const int look = MathMin(nr - depth - 2, MathMax(50, StructureLookbackBars));
+   if(look < depth * 3)
       return false;
 
-   int prev_end = seg_start - 1;
-   int prev_start = prev_end;
-   while(prev_start > 0 && ev[prev_start - 1].dir == ev[prev_end].dir)
-      prev_start--;
-
-   const int last_dir = ev[seg_end].dir;
-   const int prev_dir = ev[prev_end].dir;
-   if(last_dir == 0 || prev_dir == 0 || last_dir == prev_dir)
-      return false;
-
-   double last_tip = 0.0, prev_tip = 0.0;
-   datetime t_last = 0, t_prev = 0;
-   int i_last = 0, i_prev = 0;
-   if(!SegmentExtreme(ev, seg_start, seg_end, last_dir, last_tip, t_last, i_last))
-      return false;
-   if(t_last <= 0 || i_last < 0 || last_tip != last_tip)
-      return false;
-   if(!SegmentExtreme(ev, prev_start, prev_end, prev_dir, prev_tip, t_prev, i_prev))
-      return false;
-
-   // Z — последнее ЗАКРЫТОЕ плечо. Открытый правый участок его не заменяет.
-   // Начало диагонали — не экстремум коррекции (лой Франкфурта), а цена
-   // предыдущего хая/лоя в баре, где импульс этот уровень пересёк.
-   double broken = 0.0;
-   datetime t_broken = 0;
-   int i_broken = 0;
-   if(!PreviousSameSideExtreme(ev, prev_start, prev_dir, broken, t_broken, i_broken))
-      return false;
-   if(prev_dir > 0 && broken >= prev_tip)
-      return false;
-   if(prev_dir < 0 && broken <= prev_tip)
-      return false;
-
-   int c_end = prev_start - 1;
-   int c_start = c_end;
-   while(c_start > 0 && ev[c_start - 1].dir == ev[c_end].dir)
-      c_start--;
-   double corr_px = 0.0;
-   datetime t_corr = 0;
-   int i_corr = 0;
-   if(!SegmentExtreme(ev, c_start, c_end, ev[c_end].dir, corr_px, t_corr, i_corr))
-      return false;
-   if(i_broken < 0 || i_corr < 0 || t_broken <= 0)
-      return false;
-   if(prev_dir > 0 && broken <= corr_px)
-      return false;
-   if(prev_dir < 0 && broken >= corr_px)
-      return false;
-
-   int i_from = RateIndexAtTime(rates, t_corr);
-   int i_to = RateIndexAtTime(rates, t_prev);
-   if(i_to < 0)
-      i_to = i_prev;
-   if(i_from < 0)
-      i_from = i_to;
-   if(i_from < i_to)
+   datetime pt[];
+   double pp[];
+   int pdir[];
+   ArrayResize(pt, 0);
+   ArrayResize(pp, 0);
+   ArrayResize(pdir, 0);
+   for(int shift = depth; shift < look; shift++)
    {
-      const int sw = i_from;
-      i_from = i_to;
-      i_to = sw;
+      bool is_hi = true;
+      bool is_lo = true;
+      for(int k = shift - depth; k <= shift + depth; k++)
+      {
+         if(k < 0 || k >= nr || k == shift)
+            continue;
+         if(rates[k].high > rates[shift].high)
+            is_hi = false;
+         if(rates[k].low < rates[shift].low)
+            is_lo = false;
+      }
+      if(is_hi)
+      {
+         const int n = ArraySize(pt);
+         ArrayResize(pt, n + 1);
+         ArrayResize(pp, n + 1);
+         ArrayResize(pdir, n + 1);
+         pt[n] = rates[shift].time;
+         pp[n] = rates[shift].high;
+         pdir[n] = 1;
+      }
+      if(is_lo)
+      {
+         const int n = ArraySize(pt);
+         ArrayResize(pt, n + 1);
+         ArrayResize(pp, n + 1);
+         ArrayResize(pdir, n + 1);
+         pt[n] = rates[shift].time;
+         pp[n] = rates[shift].low;
+         pdir[n] = -1;
+      }
    }
-
-   int i_cross = -1;
-   const double eps = PointValue();
-   for(int i = i_from; i >= i_to && i >= 0; i--)
+   const int np0 = ArraySize(pt);
+   for(int a = 0; a < np0 - 1; a++)
+      for(int b = a + 1; b < np0; b++)
+         if(pt[a] > pt[b])
+         {
+            const datetime ts = pt[a]; pt[a] = pt[b]; pt[b] = ts;
+            const double ps = pp[a]; pp[a] = pp[b]; pp[b] = ps;
+            const int ds = pdir[a]; pdir[a] = pdir[b]; pdir[b] = ds;
+         }
+   datetime st[];
+   double sp[];
+   int sd[];
+   ArrayResize(st, 0);
+   ArrayResize(sp, 0);
+   ArrayResize(sd, 0);
+   for(int i = 0; i < np0; i++)
    {
-      if(rates[i].time <= t_broken)
-         continue;
-      if(prev_dir > 0 && rates[i].high + eps >= broken)
-      { i_cross = i; break; }
-      if(prev_dir < 0 && rates[i].low - eps <= broken)
-      { i_cross = i; break; }
+      const int n = ArraySize(st);
+      if(n == 0 || sd[n - 1] != pdir[i])
+      {
+         ArrayResize(st, n + 1);
+         ArrayResize(sp, n + 1);
+         ArrayResize(sd, n + 1);
+         st[n] = pt[i];
+         sp[n] = pp[i];
+         sd[n] = pdir[i];
+      }
+      else if((pdir[i] > 0 && pp[i] >= sp[n - 1]) || (pdir[i] < 0 && pp[i] <= sp[n - 1]))
+      {
+         st[n - 1] = pt[i];
+         sp[n - 1] = pp[i];
+      }
    }
-   if(i_cross < 0 || i_cross >= nr)
+   const int ns = ArraySize(st);
+   if(ns < 3)
       return false;
 
-   const int dir = prev_dir;
-   const double origin = broken;
-   const datetime t_origin = rates[i_cross].time;
-   const double tip = prev_tip;
-   const datetime t_tip = t_prev;
-   int i_tip = i_prev;
+   const int last = ns - 1;
+   int prev = last - 1;
+   while(prev >= 0 && sd[prev] == sd[last])
+      prev--;
+   if(prev < 0)
+      return false;
+
+   const int live_dir = -sd[last];
+   double live_tip = sp[last];
+   datetime t_live = st[last];
+   const int i_base = RateIndexAtTime(rates, st[last]);
+   if(i_base >= 0)
+   {
+      for(int i = i_base; i >= 0; i--)
+      {
+         if(live_dir > 0 && rates[i].high > live_tip)
+         { live_tip = rates[i].high; t_live = rates[i].time; }
+         if(live_dir < 0 && rates[i].low < live_tip)
+         { live_tip = rates[i].low; t_live = rates[i].time; }
+      }
+   }
+   const bool broke = (live_dir > 0 && live_tip > sp[prev]) || (live_dir < 0 && live_tip < sp[prev]);
+
+   int dir = 0;
+   double origin = 0.0;
+   double tip = 0.0;
+   datetime t_origin = 0;
+   datetime t_tip = 0;
+   if(broke)
+   {
+      dir = live_dir;
+      origin = sp[last];
+      t_origin = st[last];
+      tip = live_tip;
+      t_tip = t_live;
+   }
+   else
+   {
+      dir = sd[last];
+      tip = sp[last];
+      t_tip = st[last];
+      origin = sp[prev];
+      t_origin = st[prev];
+      int back = prev - 1;
+      while(back >= 0 && sd[back] == sd[prev])
+         back--;
+      if(back >= 0 && MathAbs(tip - origin) + PointValue() < MathAbs(sp[prev] - sp[back]))
+      {
+         dir = sd[prev];
+         tip = sp[prev];
+         t_tip = st[prev];
+         origin = sp[back];
+         t_origin = st[back];
+      }
+      const int i_tip0 = RateIndexAtTime(rates, t_tip);
+      if(i_tip0 >= 0)
+      {
+         for(int i = i_tip0; i >= 0; i--)
+         {
+            if(dir > 0 && rates[i].high > tip)
+            { tip = rates[i].high; t_tip = rates[i].time; }
+            if(dir < 0 && rates[i].low < tip)
+            { tip = rates[i].low; t_tip = rates[i].time; }
+         }
+      }
+   }
+   int i_tip = RateIndexAtTime(rates, t_tip);
+   if(i_tip < 0)
+      i_tip = 1;
 
    const double range = MathAbs(origin - tip);
    if(range < 20.0 * PointValue() || t_origin == t_tip)
@@ -3892,6 +3948,8 @@ void CleanupChartGraphics()
       DeleteObjectsByPrefix("ASmart426_");
    if(StringFind(Prefix(), "ASmart427_") != 0)
       DeleteObjectsByPrefix("ASmart427_");
+   if(StringFind(Prefix(), "ASmart428_") != 0)
+      DeleteObjectsByPrefix("ASmart428_");
    Comment("");
    ChartRedraw(0);
 }
@@ -5390,9 +5448,9 @@ void DrawZBundle(const string tag, const int dir,
       t_right = sw;
    }
    long span = (long)(t_right - t_left);
-   long wing = (long)sec * 8;
-   if(span / 6 > wing) wing = span / 6;
-   if(wing < (long)sec * 4) wing = (long)sec * 4;
+   long wing = (long)sec * 16;
+   if(span / 3 > wing) wing = span / 3;
+   if(wing < (long)sec * 8) wing = (long)sec * 8;
 
    datetime h0a = (datetime)((long)t_origin - wing);
    datetime h0b = (datetime)((long)t_origin + wing);
